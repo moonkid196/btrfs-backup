@@ -1,4 +1,4 @@
-eval $(ssh-agent)
+export SSH_AUTH_SOCK="/run/user/1000/keyring/ssh"
 ssh-add /home/bburke/.ssh/id_ecdsa.bburke
 mkdir -m 700 /run/backups
 mkdir -m 700 /run/backups/{self,storage}
@@ -25,4 +25,3 @@ fusermount -u /run/backups/storage
 rmdir /run/backups/self
 rmdir /run/backups/storage/
 rmdir /run/backups/
-eval $(ssh-agent -k)
