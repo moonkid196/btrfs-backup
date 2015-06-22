@@ -1,0 +1,28 @@
+eval $(ssh-agent)
+ssh-add /home/bburke/.ssh/id_ecdsa.bburke
+mkdir -m 700 /run/backups
+mkdir -m 700 /run/backups/{self,storage}
+sshfs root@hildegarde.baburke.net:/export/share/backups /run/backups/storage/
+truncate -s 30g /run/backups/storage/klaus.img
+loop=$(losetup -f)
+losetup $loop /run/backups/storage/klaus.img
+cryptsetup luksFormat $loop
+cat /root/log
+cryptsetup open $loop luks-klaus
+mkfs.btrfs /dev/mapper/luks-klaus
+mount -o compress,subvolid=0 /dev/mapper/luks-klaus /run/backups/storage/
+mount -o subvolid=0 /dev/mapper/luks-6aef8a7c-f1ce-4852-b9c9-a755046df81a /run/backups/self
+btrfs send /run/backups/self/root-2015-06-07-16/ | btrfs receive /run/backups/storage/
+btrfs send /run/backups/self/home-2015-06-07-16/ | btrfs receive /run/backups/storage/
+btrfs send -p /run/backups/self/root-2015-06-07-16/ /run/backups/self/root-2015-06-09-00 | btrfs receive /run/backups/storage/
+btrfs send -p /run/backups/self/home-2015-06-07-16/ /run/backups/self/home-2015-06-09-00 | btrfs receive /run/backups/storage/
+btrfs subvolume delete /run/backups/self/root-2015-06-07-16/
+btrfs subvolume delete /run/backups/self/root-2015-06-07-16/
+umount /run/backups/self
+cryptsetup close luks-klaus
+losetup -d $loop
+fusermount -u /run/backups/storage
+rmdir /run/backups/self
+rmdir /run/backups/storage/
+rmdir /run/backups/
+eval $(ssh-agent -k)
