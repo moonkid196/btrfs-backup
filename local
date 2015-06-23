@@ -1,0 +1,3 @@
+mount -o subvolid=0 /dev/mapper/luks-6aef8a7c-f1ce-4852-b9c9-a755046df81a /run/backups/self
+#
+umount /run/backups/self

@@ -1,0 +1,14 @@
+export SSH_AUTH_SOCK="/run/user/1000/keyring/ssh"
+sshfs root@hildegarde.baburke.net:/export/share/backups /run/backups/remote/
+$firsttime && truncate -s 30g /run/backups/remote/klaus.img
+loop=$(losetup -f)
+losetup $loop /run/backups/remote/klaus.img
+$firsttime && cryptsetup luksFormat $loop
+cryptsetup open $loop luks-klaus
+$firsttime && mkfs.btrfs /dev/mapper/luks-klaus
+mount -o compress,subvolid=0 /dev/mapper/luks-klaus /run/backups/storage/
+#
+umount /run/backups/storage
+cryptsetup close luks-klaus
+losetup -d $loop
+fusermount -u /run/backups/remote

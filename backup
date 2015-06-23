@@ -1,0 +1,6 @@
+$firsttime && btrfs send /run/backups/self/root-2015-06-07-16/ | btrfs receive /run/backups/storage/
+$firsttime && btrfs send /run/backups/self/home-2015-06-07-16/ | btrfs receive /run/backups/storage/
+btrfs send -p /run/backups/self/root-2015-06-07-16/ /run/backups/self/root-2015-06-09-00 | btrfs receive /run/backups/storage/
+btrfs send -p /run/backups/self/home-2015-06-07-16/ /run/backups/self/home-2015-06-09-00 | btrfs receive /run/backups/storage/
+btrfs subvolume delete /run/backups/self/root-2015-06-07-16/
+btrfs subvolume delete /run/backups/self/root-2015-06-07-16/
