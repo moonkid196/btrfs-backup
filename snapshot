@@ -1,0 +1,46 @@
+#!/bin/ksh
+
+export PATH="/usr/local/bin:/usr/local/sbin:/usr/bin:/usr/sbin"
+
+set -o braceexpand
+
+typeset -A _devices
+typeset _date=$(date +"%F-%H")
+typeset _mountpoint="/mnt"
+
+# Flags
+qflag="false"
+
+while getopts ':q' _opt; do
+    case "$_opt" in
+        "q")
+            qflag="true"
+        ;;
+        "?")
+            echo "Bad argument -$_opt" 1>&2
+            # usage
+            exit 1
+    esac
+done
+
+_msg()
+{
+    $qflag || echo "$@"
+}
+
+# Subvolumes on device, relative to btrfs root
+_devices["/dev/mapper/luks-6aef8a7c-f1ce-4852-b9c9-a755046df81a"]=("root" "home")
+
+for _d in "${!_devices[@]}"; do
+    _msg "Processing device $_d"
+    mount -o subvolid=0 "$_d" "$_mountpoint"
+
+    for _v in "${_devices[$_d][@]}"; do
+        _msg "Snapshotting subvolume $_v"
+        _p="$_mountpoint/$_v"
+
+        btrfs subvolume snapshot -r "$_p" "$_p-$_date" >/dev/null
+    done
+
+    umount "$_mountpoint"
+done
