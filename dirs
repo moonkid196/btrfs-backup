@@ -1,7 +1,0 @@
-mkdir -m 700 /run/backups
-mkdir -m 700 /run/backups/{self,storage,remote}
-#
-rmdir /run/backups/self
-rmdir /run/backups/storage/
-rmdir /run/backups/remote/
-rmdir /run/backups/
