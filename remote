@@ -1,14 +1,54 @@
-export SSH_AUTH_SOCK="/run/user/1000/keyring/ssh"
-sshfs root@hildegarde.baburke.net:/export/share/backups /run/backups/remote/
-$firsttime && truncate -s 30g /run/backups/remote/klaus.img
-loop=$(losetup -f)
-losetup $loop /run/backups/remote/klaus.img
-$firsttime && cryptsetup luksFormat $loop
-cryptsetup open $loop luks-klaus
-$firsttime && mkfs.btrfs /dev/mapper/luks-klaus
-mount -o compress,subvolid=0 /dev/mapper/luks-klaus /run/backups/storage/
-#
-umount /run/backups/storage
-cryptsetup close luks-klaus
-losetup -d $loop
-fusermount -u /run/backups/remote
+#!/bin/ksh
+
+SSH_AUTH_SOCK="/run/user/1000/keyring/ssh"
+REMOTE_SSH_USER="root"
+REMOTE_SSH_HOST="hildegarde.baburke.net"
+REMOTE_SSH_PATH="/export/share/backups"
+CONF=([dirs]=([remote]="/run/btrfs-backups/remote"))
+CONF[dirs]+=([backups]="/run/btrfs-backups/backups")
+CONF+=([storage]=([initial]="50g"))
+REMOTE_IMAGE="klaus.img"
+
+first="false"
+encrypted="true"
+
+_imagepath="${CONF[dirs][remote]}/$REMOTE_IMAGE"
+_mappername="luks-klaus"
+_mapperpath="/dev/mapper/$_mappername"
+
+export SSH_AUTH_SOCK
+
+echo "Adding remote"
+sshfs "${REMOTE_SSH_USER}@${REMOTE_SSH_HOST}:${REMOTE_SSH_PATH}" "${CONF[dirs][remote]}"
+
+if "$first"; then
+    truncate -s "${CONF[storage][initial]}" "$_imagepath"
+fi
+
+_loop=$(losetup -f)
+losetup "$_loop" "$_imagepath"
+
+if "$encrypted"; then
+    if "$first"; then
+        $firsttime && cryptsetup luksFormat "$_loop"
+    fi
+
+    cryptsetup open "$_loop" "$_mappername"
+fi
+
+if "$first"; then
+    mkfs -t btrfs "$_mapperpath"
+fi
+
+mount -o compress,subvolid=0 "$_mapperpath" "${CONF[dirs][backups]}"
+
+df -h
+sleep 10
+echo "Removing remote"
+
+umount "${CONF[dirs][backups]}"
+cryptsetup close "$_mappername"
+losetup -d "$_loop"
+fusermount -u "${CONF[dirs][remote]}"
+
+df -h
