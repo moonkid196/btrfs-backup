@@ -1,0 +1,38 @@
+#!/bin/ksh -x
+
+_config=~+/config
+
+function turn_root
+{
+    if [[ $(id -u) != 0 ]]; then
+        sudo "$@"
+        exit $?
+    fi
+}
+
+function mount_local
+{
+    typeset -n _conf="$1"
+    typeset _uuid="$2"
+
+    mount -o subvolid=0 UUID="${_conf[backups][$_uuid][localuuid]}" "${_conf[dirs][self]}"
+
+    return 0
+}
+
+function unmount_local
+{
+    typeset -n _conf="$1"
+
+    umount "${_conf[dirs][self]}"
+
+    return 0
+}
+
+. "$_config"
+turn_root "$0" "$@"
+
+for _uuid in "${!CONF[backups][@]}"; do
+    mount_local "CONF" "$_uuid"
+    unmount_local "CONF"
+done
