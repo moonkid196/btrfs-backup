@@ -1,54 +1,45 @@
-#!/bin/ksh
+#!/bin/ksh -x
+
+. ~+/config
+
+if [[ $(id -u) != 0 ]]; then
+    sudo "${!CONF[dbusenv][@]}"="${CONF[dbusenv][@]}" $0 "$@"
+    exit $?
+fi
 
 SSH_AUTH_SOCK="/run/user/1000/keyring/ssh"
-REMOTE_SSH_USER="root"
-REMOTE_SSH_HOST="hildegarde.baburke.net"
-REMOTE_SSH_PATH="/export/share/backups"
-CONF=([dirs]=([remote]="/run/btrfs-backups/remote"))
-CONF[dirs]+=([backups]="/run/btrfs-backups/backups")
-CONF+=([storage]=([initial]="50g"))
-REMOTE_IMAGE="klaus.img"
 
-first="false"
 encrypted="true"
-
-_imagepath="${CONF[dirs][remote]}/$REMOTE_IMAGE"
-_mappername="luks-klaus"
-_mapperpath="/dev/mapper/$_mappername"
+_uuid="${!CONF[backups][@]}"
+_user="root"
+_host="hildegarde.baburke.net"
+_path="/export/share/backups"
 
 export SSH_AUTH_SOCK
 
 echo "Adding remote"
-sshfs "${REMOTE_SSH_USER}@${REMOTE_SSH_HOST}:${REMOTE_SSH_PATH}" "${CONF[dirs][remote]}"
-
-if "$first"; then
-    truncate -s "${CONF[storage][initial]}" "$_imagepath"
-fi
+sshfs "${_user}@${_host}:${_path}" "${CONF[dirs][remote]}"
 
 _loop=$(losetup -f)
-losetup "$_loop" "$_imagepath"
+losetup "$_loop" "${CONF[dirs][remote]}/klaus.img"
 
 if "$encrypted"; then
-    if "$first"; then
-        $firsttime && cryptsetup luksFormat "$_loop"
-    fi
-
-    cryptsetup open "$_loop" "$_mappername"
+    _tmpdir="$(mktemp -d /dev/shm/btrfs-backups.XXXXXXXXXX)"
+    _luksuuid="$(cryptsetup luksUUID $_loop)"
+    sudo "${!CONF[dbusenv][@]}"="${CONF[dbusenv][@]}" -u ${CONF[adminuser]} secret-tool lookup tool btrfs-backups > "$_tmpdir/.f"
+    cryptsetup open "$_loop" "luks-$_luksuuid" --key-file "$_tmpdir/.f"
+    rm -rf "$_tmpdir"
 fi
 
-if "$first"; then
-    mkfs -t btrfs "$_mapperpath"
-fi
+mount -o compress,subvolid=0 "/dev/mapper/luks-$_luksuuid" "${CONF[dirs][backups]}"
 
-mount -o compress,subvolid=0 "$_mapperpath" "${CONF[dirs][backups]}"
+#df -h
+#sleep 10
+#echo "Removing remote"
 
-df -h
-sleep 10
-echo "Removing remote"
+#umount "${CONF[dirs][backups]}"
+#cryptsetup close "$_mappername"
+#losetup -d "$_loop"
+#fusermount -u "${CONF[dirs][remote]}"
 
-umount "${CONF[dirs][backups]}"
-cryptsetup close "$_mappername"
-losetup -d "$_loop"
-fusermount -u "${CONF[dirs][remote]}"
-
-df -h
+#df -h

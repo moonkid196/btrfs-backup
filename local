@@ -1,3 +1,13 @@
-mount -o subvolid=0 /dev/mapper/luks-6aef8a7c-f1ce-4852-b9c9-a755046df81a /run/backups/self
-#
-umount /run/backups/self
+#!/bin/ksh
+
+if [[ $(id -u) != 0 ]]; then
+    sudo "$0" "$@"
+    exit $?
+fi
+
+. ~+/config
+_uuid="${!CONF[backups][@]}"
+
+mount -o subvolid=0 UUID="${CONF[backups][$_uuid][localuuid]}" "${CONF[dirs][self]}"
+
+#umount "${CONF[dirs][self]}"

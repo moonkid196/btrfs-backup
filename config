@@ -1,0 +1,23 @@
+#!/bin/ksh
+
+CONF=([name]="btrfs-backup")
+
+CONF[backups]+=(
+    [7d8cdd94-f130-4aac-985f-ffb847f0f8ad]=(
+        [uri]="sshfs://root@hildegarde.baburke.net/export/share/backups/klaus.img"
+        [keep]=0
+        [localkeep]=8
+        [localuuid]="cebfb5b2-016d-4e83-b7a6-a28f3b42814b"
+    )
+)
+
+CONF[dirs]=(
+    [backups]="/run/btrfs-backup/backups"
+    [self]="/run/btrfs-backup/self"
+    [remote]="/run/btrfs-backup/remote"
+)
+
+CONF[adminuser]="bburke"
+CONF[dbusenv]=(
+    [DBUS_SESSION_BUS_ADDRESS]="${DBUS_SESSION_BUS_ADDRESS}"
+)
