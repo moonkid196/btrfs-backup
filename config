@@ -8,6 +8,7 @@ CONF[backups]+=(
         [keep]=0
         [localkeep]=8
         [localuuid]="cebfb5b2-016d-4e83-b7a6-a28f3b42814b"
+        [encrypted]="true"
     )
 )
 

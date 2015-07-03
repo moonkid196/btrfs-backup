@@ -1,5 +1,7 @@
 #!/bin/ksh
 
+set -e
+
 _config=~+/config
 _dbusvar="DBUS_SESSION_BUS_ADDRESS"
 _sshvar="SSH_AUTH_SOCK"
@@ -8,8 +10,87 @@ _remote_user="$(id -u)"
 _remote_host=""
 _remote_path=""
 _remote_image=""
+_luksuuid=""
+_loop=""
 
 qflag="false"
+
+function mount_remote
+{
+    typeset -n _conf="$1"
+    typeset _uuid="$2"
+    typeset _tmpdir
+    typeset _dev
+
+    _loop=$(losetup -f)
+
+    case "$_remote_proto" in
+        "sshfs")
+            export "$_sshvar"="${_conf[env][$_sshvar]}"
+
+            echo + Mounting \
+                    ${_remote_user}@${_remote_host}:${_remote_path} \
+                    on ${_conf[dirs][remote]}
+
+            sshfs "${_remote_user}@${_remote_host}:${_remote_path}" \
+                    "${_conf[dirs][remote]}"
+
+        ;;
+        *)
+            echo ERROR: Unknown protocol $_remote_proto 1>&2
+            return 1
+        ;;
+    esac
+
+    echo + Mapping $_remote_image to $_loop
+    losetup "$_loop" "${CONF[dirs][remote]}/$_remote_image"
+    _dev="$_loop"
+
+    if "${_conf[backups][$_uuid][encrypted]}"; then
+        _tmpdir="$(mktemp -d /dev/shm/btrfs-backups.XXXXXXXXXX)"
+        _luksuuid="$(cryptsetup luksUUID $_loop)"
+
+        echo + Reading encryption passphrase from gnome-keyring
+        sudo "$_dbusvar"="${_conf[env][$_dbusvar]}" -u "${_conf[adminuser]}" secret-tool lookup tool btrfs-backups > "$_tmpdir/.f"
+
+        echo + Opening $_loop as luks-$_luksuuid
+        cryptsetup -q open "$_loop" "luks-$_luksuuid" --key-file "$_tmpdir/.f"
+        rm -rf "$_tmpdir"
+        _dev="/dev/mapper/luks-$_luksuuid"
+
+    fi
+
+    echo + Mounting $_dev on ${_conf[dirs][backups]}
+    mount -o compress,subvolid=0 "$_dev" "${_conf[dirs][backups]}"
+}
+
+function unmount_remote
+{
+    typeset -n _conf="$1"
+    typeset _uuid="$2"
+
+    echo + Unmounting ${_conf[dirs][backups]}
+    umount "${_conf[dirs][backups]}"
+
+    if "${_conf[backups][$_uuid][encrypted]}"; then
+        echo + Closing luks-$_luksuuid
+        cryptsetup -q close "luks-$_luksuuid"
+    fi
+
+    echo + Detaching $_loop
+    losetup -d "$_loop"
+
+    case "$_remote_proto" in
+        sshfs)
+            echo + Removing sshfs share on ${_conf[dirs][remote]}
+            fusermount -u "${_conf[dirs][remote]}"
+        ;;
+        *)
+            echo ERROR: Unknown protocol? \(=$_remote_proto\)
+            return 1
+        ;;
+    esac
+}
 
 function extract_remote
 {
@@ -40,10 +121,6 @@ function extract_remote
     $qflag || echo "+ Setting _remote_host to $_remote_host"
     $qflag || echo "+ Setting _remote_path to $_remote_path"
     $qflag || echo "+ Setting _remote_image to $_remote_image"
-
-    if [[ "$_remote_proto" != @(sshfs|nfs) ]]; then
-        return 1
-    fi
 
     if [[ -z "$_remote_host" || -z "$_remote_path" || \
           -z "$_remote_image" ]]; then
@@ -99,6 +176,15 @@ turn_root "CONF" "$0" "$@"
 
 for _uuid in "${!CONF[backups][@]}"; do
     mount_local "CONF" "$_uuid"
-    extract_remote "CONF" "$_uuid"
+
+    if ! extract_remote "CONF" "$_uuid"; then
+        echo Failed to parse URI = ${CONF[backups][$_uuid][uri]} 1>&2
+        echo Trying next backup 1>&2
+        unmount_local "CONF"
+        continue
+    fi
+
+    mount_remote "CONF" "$_uuid"
+    unmount_remote "CONF" "$_uuid"
     unmount_local "CONF"
 done
