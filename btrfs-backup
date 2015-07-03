@@ -1,13 +1,73 @@
-#!/bin/ksh -x
+#!/bin/ksh
 
 _config=~+/config
+_dbusvar="DBUS_SESSION_BUS_ADDRESS"
+_sshvar="SSH_AUTH_SOCK"
+_remote_proto="sshfs"
+_remote_user="$(id -u)"
+_remote_host=""
+_remote_path=""
+_remote_image=""
+
+qflag="false"
+
+function extract_remote
+{
+    typeset -n _conf="$1"
+    typeset _uuid="$2"
+    typeset _uri="${_conf[backups][$_uuid][uri]}"
+
+    if [[ "$_uri" =~ ^([a-z]+)://(.*)$ ]]; then
+        _remote_proto="${.sh.match[1]}"
+        _uri="${.sh.match[2]}"
+    fi
+
+    $qflag || echo "+ Setting _remote_proto to $_remote_proto"
+
+    if [[ "$_uri" =~ ^(([a-z][a-z0-9]*)?@)?(.*)$ ]]; then
+        _remote_user="${.sh.match[2]}"
+        _uri="${.sh.match[3]}"
+    fi
+
+    $qflag || echo "+ Setting _remote_user to $_remote_user"
+
+    if [[ "$_uri" =~ ^([a-zA-Z.0-9_-]+)(/.*)?/([^/]+.img)$ ]]; then
+        _remote_host="${.sh.match[1]}"
+        _remote_path="${.sh.match[2]}"
+        _remote_image="${.sh.match[3]}"
+    fi
+
+    $qflag || echo "+ Setting _remote_host to $_remote_host"
+    $qflag || echo "+ Setting _remote_path to $_remote_path"
+    $qflag || echo "+ Setting _remote_image to $_remote_image"
+
+    if [[ "$_remote_proto" != @(sshfs|nfs) ]]; then
+        return 1
+    fi
+
+    if [[ -z "$_remote_host" || -z "$_remote_path" || \
+          -z "$_remote_image" ]]; then
+        return 1
+    fi
+
+    ping -nqc 1 -W 5 "$_remote_host" >/dev/null || return 1
+
+    return 0
+}
 
 function turn_root
 {
+    typeset -n _conf="$1"
+    shift 1
+
     if [[ $(id -u) != 0 ]]; then
-        sudo "$@"
+        $qflag || echo + Changing UID: $(id -u) =\> 0
+        sudo "${_dbusvar}"="${_conf[env][$_dbusvar]}" "$@"
+        $qflag || echo + Exiting unprivileged shell
         exit $?
     fi
+
+    return 0
 }
 
 function mount_local
@@ -15,24 +75,30 @@ function mount_local
     typeset -n _conf="$1"
     typeset _uuid="$2"
 
+    $qflag || echo + \
+            Mounting ${_conf[backups][$_uuid][localuuid]} \
+            on ${_conf[dirs][self]}
     mount -o subvolid=0 UUID="${_conf[backups][$_uuid][localuuid]}" "${_conf[dirs][self]}"
 
-    return 0
+    return $?
 }
 
 function unmount_local
 {
     typeset -n _conf="$1"
 
+    $qflag || echo + \
+            Unmounting ${_conf[dirs][self]}
     umount "${_conf[dirs][self]}"
 
-    return 0
+    return $?
 }
 
 . "$_config"
-turn_root "$0" "$@"
+turn_root "CONF" "$0" "$@"
 
 for _uuid in "${!CONF[backups][@]}"; do
     mount_local "CONF" "$_uuid"
+    extract_remote "CONF" "$_uuid"
     unmount_local "CONF"
 done

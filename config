@@ -18,6 +18,7 @@ CONF[dirs]=(
 )
 
 CONF[adminuser]="bburke"
-CONF[dbusenv]=(
+CONF[env]=(
     [DBUS_SESSION_BUS_ADDRESS]="${DBUS_SESSION_BUS_ADDRESS}"
+    [SSH_AUTH_SOCK]="/run/user/1000/keyring/ssh"
 )

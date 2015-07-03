@@ -1,11 +1,5 @@
 #!/bin/ksh -x
 
-. ~+/config
-
-if [[ $(id -u) != 0 ]]; then
-    sudo "${!CONF[dbusenv][@]}"="${CONF[dbusenv][@]}" $0 "$@"
-    exit $?
-fi
 
 SSH_AUTH_SOCK="/run/user/1000/keyring/ssh"
 
@@ -14,13 +8,13 @@ _uuid="${!CONF[backups][@]}"
 _user="root"
 _host="hildegarde.baburke.net"
 _path="/export/share/backups"
+_loop=$(losetup -f)
 
 export SSH_AUTH_SOCK
 
 echo "Adding remote"
 sshfs "${_user}@${_host}:${_path}" "${CONF[dirs][remote]}"
 
-_loop=$(losetup -f)
 losetup "$_loop" "${CONF[dirs][remote]}/klaus.img"
 
 if "$encrypted"; then
