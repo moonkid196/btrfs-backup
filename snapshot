@@ -1,12 +1,11 @@
 #!/bin/ksh
 
-export PATH="/usr/local/bin:/usr/local/sbin:/usr/bin:/usr/sbin"
-
+set -e
 set -o braceexpand
 
 typeset -A _devices
 typeset _date=$(date +"%F-%H")
-typeset _mountpoint="/mnt"
+typeset _config=~+/config
 
 # Flags
 qflag="false"
@@ -28,19 +27,23 @@ _msg()
     $qflag || echo "$@"
 }
 
+. "$_config"
+
 # Subvolumes on device, relative to btrfs root
-_devices["/dev/mapper/luks-6aef8a7c-f1ce-4852-b9c9-a755046df81a"]=("root" "home")
+for _uuid in "${!CONF[backups][@]}"; do
+    typeset -n _conf="CONF[backups][$_uuid]"
 
-for _d in "${!_devices[@]}"; do
-    _msg "Processing device $_d"
-    mount -o subvolid=0 "$_d" "$_mountpoint"
+    _msg "+ Processing backup id $_uuid"
+    mount -o subvolid=0 UUID="${_conf[localuuid]}" "${CONF[dirs][self]}"
 
-    for _v in "${_devices[$_d][@]}"; do
-        _msg "Snapshotting subvolume $_v"
-        _p="$_mountpoint/$_v"
+    for _v in "${_conf[volumes][@]}"; do
+        _p="${CONF[dirs][self]}/$_v"
 
-        btrfs subvolume snapshot -r "$_p" "$_p-$_date" >/dev/null
+        _msg "+ Snapshotting subvolume $_v at $_date"
+        btrfs subvolume snapshot -r "$_p" "$_p-$_date" >/dev/null 2>&1
     done
 
-    umount "$_mountpoint"
+    umount "${CONF[dirs][self]}"
 done
+
+_msg "+ Exiting"
