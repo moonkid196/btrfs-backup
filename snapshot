@@ -1,11 +1,13 @@
 #!/bin/ksh
 
+export PATH="/usr/bin:/usr/sbin"
+
 set -e
 set -o braceexpand
 
 typeset -A _devices
 typeset _date=$(date +"%F-%H")
-typeset _config=~+/config
+typeset _config="/home/bburke/dev/btrfs-backup/config"
 
 # Flags
 qflag="false"
@@ -35,14 +37,16 @@ for _uuid in "${!CONF[backups][@]}"; do
 
     _msg "+ Processing backup id $_uuid"
     mount -o subvolid=0 UUID="${_conf[localuuid]}" "${CONF[dirs][self]}"
+    trap "umount ${CONF[dirs][self]}" EXIT
 
     for _v in "${_conf[volumes][@]}"; do
         _p="${CONF[dirs][self]}/$_v"
 
         _msg "+ Snapshotting subvolume $_v at $_date"
-        btrfs subvolume snapshot -r "$_p" "$_p-$_date" >/dev/null 2>&1
+        btrfs subvolume snapshot -r "$_p" "$_p-$_date"
     done
 
+    trap - EXIT
     umount "${CONF[dirs][self]}"
 done
 
