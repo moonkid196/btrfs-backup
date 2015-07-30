@@ -28,7 +28,7 @@ function mount_remote
         "sshfs")
             export "$_sshvar"="${_conf[env][$_sshvar]}"
 
-            echo + Mounting \
+            $qflag || echo + Mounting \
                     ${_remote_user}@${_remote_host}:${_remote_path} \
                     on ${_conf[dirs][remote]}
 
@@ -42,7 +42,7 @@ function mount_remote
         ;;
     esac
 
-    echo + Mapping $_remote_image to $_loop
+    $qflag || echo + Mapping $_remote_image to $_loop
     losetup "$_loop" "${CONF[dirs][remote]}/$_remote_image"
     _dev="$_loop"
 
@@ -50,17 +50,17 @@ function mount_remote
         _tmpdir="$(mktemp -d /dev/shm/btrfs-backups.XXXXXXXXXX)"
         _luksuuid="$(cryptsetup luksUUID $_loop)"
 
-        echo + Reading encryption passphrase from gnome-keyring
+        $qflag || echo + Reading encryption passphrase from gnome-keyring
         sudo "$_dbusvar"="${_conf[env][$_dbusvar]}" -u "${_conf[adminuser]}" secret-tool lookup tool btrfs-backups > "$_tmpdir/.f"
 
-        echo + Opening $_loop as luks-$_luksuuid
+        $qflag || echo + Opening $_loop as luks-$_luksuuid
         cryptsetup -q open "$_loop" "luks-$_luksuuid" --key-file "$_tmpdir/.f"
         rm -rf "$_tmpdir"
         _dev="/dev/mapper/luks-$_luksuuid"
 
     fi
 
-    echo + Mounting $_dev on ${_conf[dirs][backups]}
+    $qflag || echo + Mounting $_dev on ${_conf[dirs][backups]}
     mount -o compress,subvolid=0 "$_dev" "${_conf[dirs][backups]}"
 }
 
@@ -69,20 +69,20 @@ function unmount_remote
     typeset -n _conf="$1"
     typeset _uuid="$2"
 
-    echo + Unmounting ${_conf[dirs][backups]}
+    $qflag || echo + Unmounting ${_conf[dirs][backups]}
     umount "${_conf[dirs][backups]}"
 
     if "${_conf[backups][$_uuid][encrypted]}"; then
-        echo + Closing luks-$_luksuuid
+        $qflag || echo + Closing luks-$_luksuuid
         cryptsetup -q close "luks-$_luksuuid"
     fi
 
-    echo + Detaching $_loop
+    $qflag || echo + Detaching $_loop
     losetup -d "$_loop"
 
     case "$_remote_proto" in
         sshfs)
-            echo + Removing sshfs share on ${_conf[dirs][remote]}
+            $qflag || echo + Removing sshfs share on ${_conf[dirs][remote]}
             fusermount -u "${_conf[dirs][remote]}"
         ;;
         *)
@@ -185,6 +185,9 @@ for _uuid in "${!CONF[backups][@]}"; do
     fi
 
     mount_remote "CONF" "$_uuid"
+
+    read
+
     unmount_remote "CONF" "$_uuid"
     unmount_local "CONF"
 done
