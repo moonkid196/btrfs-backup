@@ -43,7 +43,7 @@ for _uuid in "${!CONF[backups][@]}"; do
         _p="${CONF[dirs][self]}/$_v"
 
         _msg "+ Snapshotting subvolume $_v at $_date"
-        btrfs subvolume snapshot -r "$_p" "$_p-$_date"
+        btrfs subvolume snapshot -r "$_p" "$_p-$_date" >/dev/null
     done
 
     trap - EXIT
