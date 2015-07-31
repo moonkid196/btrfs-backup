@@ -15,6 +15,16 @@ _loop=""
 
 qflag="false"
 
+function _msg
+{
+    $qflag || echo "$@"
+}
+
+function _err
+{
+    echo "$@" 1>&2
+}
+
 function mount_remote
 {
     typeset -n _conf="$1"
@@ -28,7 +38,7 @@ function mount_remote
         "sshfs")
             export "$_sshvar"="${_conf[env][$_sshvar]}"
 
-            $qflag || echo + Mounting \
+            _msg + Mounting \
                     ${_remote_user}@${_remote_host}:${_remote_path} \
                     on ${_conf[dirs][remote]}
 
@@ -37,12 +47,12 @@ function mount_remote
 
         ;;
         *)
-            echo ERROR: Unknown protocol $_remote_proto 1>&2
+            _err "ERROR: Unknown protocol $_remote_proto"
             return 1
         ;;
     esac
 
-    $qflag || echo + Mapping $_remote_image to $_loop
+    _msg "+ Mapping $_remote_image to $_loop"
     losetup "$_loop" "${CONF[dirs][remote]}/$_remote_image"
     _dev="$_loop"
 
@@ -50,17 +60,17 @@ function mount_remote
         _tmpdir="$(mktemp -d /dev/shm/btrfs-backups.XXXXXXXXXX)"
         _luksuuid="$(cryptsetup luksUUID $_loop)"
 
-        $qflag || echo + Reading encryption passphrase from gnome-keyring
+        _msg "+ Reading encryption passphrase from gnome-keyring"
         sudo "$_dbusvar"="${_conf[env][$_dbusvar]}" -u "${_conf[adminuser]}" secret-tool lookup tool btrfs-backups > "$_tmpdir/.f"
 
-        $qflag || echo + Opening $_loop as luks-$_luksuuid
+        _msg "+ Opening $_loop as luks-$_luksuuid"
         cryptsetup -q open "$_loop" "luks-$_luksuuid" --key-file "$_tmpdir/.f"
         rm -rf "$_tmpdir"
         _dev="/dev/mapper/luks-$_luksuuid"
 
     fi
 
-    $qflag || echo + Mounting $_dev on ${_conf[dirs][backups]}
+    _msg "+ Mounting $_dev on ${_conf[dirs][backups]}"
     mount -o compress,subvolid=0 "$_dev" "${_conf[dirs][backups]}"
 }
 
@@ -69,24 +79,24 @@ function unmount_remote
     typeset -n _conf="$1"
     typeset _uuid="$2"
 
-    $qflag || echo + Unmounting ${_conf[dirs][backups]}
+    _msg "+ Unmounting ${_conf[dirs][backups]}"
     umount "${_conf[dirs][backups]}"
 
     if "${_conf[backups][$_uuid][encrypted]}"; then
-        $qflag || echo + Closing luks-$_luksuuid
+        _msg "+ Closing luks-$_luksuuid"
         cryptsetup -q close "luks-$_luksuuid"
     fi
 
-    $qflag || echo + Detaching $_loop
+    _msg "+ Detaching $_loop"
     losetup -d "$_loop"
 
     case "$_remote_proto" in
         sshfs)
-            $qflag || echo + Removing sshfs share on ${_conf[dirs][remote]}
+            _msg "+ Removing sshfs share on ${_conf[dirs][remote]}"
             fusermount -u "${_conf[dirs][remote]}"
         ;;
         *)
-            echo ERROR: Unknown protocol? \(=$_remote_proto\)
+            _err "ERROR: Unknown protocol? \(=$_remote_proto\)"
             return 1
         ;;
     esac
@@ -103,14 +113,14 @@ function extract_remote
         _uri="${.sh.match[2]}"
     fi
 
-    $qflag || echo "+ Setting _remote_proto to $_remote_proto"
+    _msg "+ Setting _remote_proto to $_remote_proto"
 
     if [[ "$_uri" =~ ^(([a-z][a-z0-9]*)?@)?(.*)$ ]]; then
         _remote_user="${.sh.match[2]}"
         _uri="${.sh.match[3]}"
     fi
 
-    $qflag || echo "+ Setting _remote_user to $_remote_user"
+    _msg "+ Setting _remote_user to $_remote_user"
 
     if [[ "$_uri" =~ ^([a-zA-Z.0-9_-]+)(/.*)?/([^/]+.img)$ ]]; then
         _remote_host="${.sh.match[1]}"
@@ -118,9 +128,9 @@ function extract_remote
         _remote_image="${.sh.match[3]}"
     fi
 
-    $qflag || echo "+ Setting _remote_host to $_remote_host"
-    $qflag || echo "+ Setting _remote_path to $_remote_path"
-    $qflag || echo "+ Setting _remote_image to $_remote_image"
+    _msg "+ Setting _remote_host to $_remote_host"
+    _msg "+ Setting _remote_path to $_remote_path"
+    _msg "+ Setting _remote_image to $_remote_image"
 
     if [[ -z "$_remote_host" || -z "$_remote_path" || \
           -z "$_remote_image" ]]; then
@@ -138,9 +148,9 @@ function turn_root
     shift 1
 
     if [[ $(id -u) != 0 ]]; then
-        $qflag || echo + Changing UID: $(id -u) =\> 0
+        _msg "+ Changing UID: $(id -u) => 0"
         sudo "${_dbusvar}"="${_conf[env][$_dbusvar]}" "$@"
-        $qflag || echo + Exiting unprivileged shell
+        _msg "+ Exiting unprivileged shell"
         exit $?
     fi
 
@@ -152,10 +162,10 @@ function mount_local
     typeset -n _conf="$1"
     typeset _uuid="$2"
 
-    $qflag || echo + \
-            Mounting ${_conf[backups][$_uuid][localuuid]} \
-            on ${_conf[dirs][self]}
-    mount -o subvolid=0 UUID="${_conf[backups][$_uuid][localuuid]}" "${_conf[dirs][self]}"
+    _msg + "Mounting ${_conf[backups][$_uuid][localuuid]}" \
+            "on ${_conf[dirs][self]}"
+    mount -o subvolid=0 UUID="${_conf[backups][$_uuid][localuuid]}" \
+            "${_conf[dirs][self]}"
 
     return $?
 }
@@ -164,8 +174,7 @@ function unmount_local
 {
     typeset -n _conf="$1"
 
-    $qflag || echo + \
-            Unmounting ${_conf[dirs][self]}
+    _msg "+ Unmounting ${_conf[dirs][self]}"
     umount "${_conf[dirs][self]}"
 
     return $?
@@ -178,8 +187,8 @@ for _uuid in "${!CONF[backups][@]}"; do
     mount_local "CONF" "$_uuid"
 
     if ! extract_remote "CONF" "$_uuid"; then
-        echo Failed to parse URI = ${CONF[backups][$_uuid][uri]} 1>&2
-        echo Trying next backup 1>&2
+        _err "Failed to parse URI = ${CONF[backups][$_uuid][uri]}"
+        _err "Trying next backup"
         unmount_local "CONF"
         continue
     fi

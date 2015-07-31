@@ -10,7 +10,17 @@ typeset _date=$(date +"%F-%H")
 typeset _config="/home/bburke/dev/btrfs-backup/config"
 
 # Flags
-qflag="false"
+typeset qflag="false"
+
+function _msg
+{
+    $qflag || echo "$@"
+}
+
+function _err
+{
+    echo "$@" 1>&2
+}
 
 while getopts ':q' _opt; do
     case "$_opt" in
@@ -18,16 +28,11 @@ while getopts ':q' _opt; do
             qflag="true"
         ;;
         "?")
-            echo "Bad argument -$_opt" 1>&2
+            _err "Bad argument -$_opt"
             # usage
             exit 1
     esac
 done
-
-_msg()
-{
-    $qflag || echo "$@"
-}
 
 . "$_config"
 
