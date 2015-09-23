@@ -1,6 +1,21 @@
-$firsttime && btrfs send /run/backups/self/root-2015-06-07-16/ | btrfs receive /run/backups/storage/
-$firsttime && btrfs send /run/backups/self/home-2015-06-07-16/ | btrfs receive /run/backups/storage/
-btrfs send -p /run/backups/self/root-2015-06-07-16/ /run/backups/self/root-2015-06-09-00 | btrfs receive /run/backups/storage/
-btrfs send -p /run/backups/self/home-2015-06-07-16/ /run/backups/self/home-2015-06-09-00 | btrfs receive /run/backups/storage/
-btrfs subvolume delete /run/backups/self/root-2015-06-07-16/
-btrfs subvolume delete /run/backups/self/root-2015-06-07-16/
+#!/bin/ksh
+
+typeset _tmp="$(mktemp /tmp/btrfs-backup.XXXXXXXXXX)"
+typeset _prev="$(basename $(ls -1d ~(E)backups/home-[0-9]{4}-[0-9]{2}-[0-9]{2}-[0-9]{2} | tail -n 1))"
+
+_prev="${_prev##home-}"
+
+for d in ~(E)self/home-[0-9]{4}-[0-9]{2}-[0-9]{2}-[0-9]{2}; do
+    _f="$(basename $d)"
+    echo "${_f##home-}"
+done > "$_tmp"
+
+typeset _count=0
+for d in $(<$_tmp); do
+    if [[ $d > $_prev && $_count -lt 2 ]]; then
+        btrfs send -p self/home-$_prev self/home-$d | btrfs receive backups
+        btrfs send -p self/root-$_prev self/root-$d | btrfs receive backups
+        _prev=$d
+        _count=$(($_count + 1))
+    fi
+done

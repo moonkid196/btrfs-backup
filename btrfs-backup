@@ -1,4 +1,10 @@
 #!/bin/ksh
+#
+# Bryan Burke
+# bburke@baburke.net
+#
+# Tool to manage initialize and transfer btrfs backups
+#
 
 set -e
 
