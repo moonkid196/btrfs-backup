@@ -31,6 +31,45 @@ function _err
     echo "$@" 1>&2
 }
 
+function do_backup
+{
+    set -x
+    cd /run/btrfs-backup
+
+    typeset _tmp="$(mktemp /tmp/btrfs-backup.XXXXXXXXXX)"
+    typeset _prev="$(ls -1d ~(E)backups/home-[0-9]{4}-[0-9]{2}-[0-9]{2}-[0-9]{2} | tail -n 1)"
+    _prev="$(basename ${_prev} | sed -e 's/^home-//')"
+
+    for d in ~(E)self/home-[0-9]{4}-[0-9]{2}-[0-9]{2}-[0-9]{2}; do
+        _f="$(basename $d)"
+        echo "${_f##home-}"
+    done > "$_tmp"
+
+    typeset _count=0
+    for d in $(<$_tmp); do
+        if [[ $d > $_prev && $_count -lt 2 ]]; then
+            btrfs send -p self/home-$_prev self/home-$d | btrfs receive backups
+            btrfs send -p self/root-$_prev self/root-$d | btrfs receive backups
+            sync
+            _prev=$d
+            _count=$(($_count + 1))
+        fi
+    done
+
+    # Check to see if we're up-to-date and local backups can be deleted
+    if [[ "$_prev" == "$(tail -n 1 $_tmp)" ]]; then
+        _local="$(wc -l $_tmp | cut -d ' ' -f 1)"
+        _todel=$(($_local - 24))
+
+        for d in $(head -n $_todel $_tmp); do
+            btrfs subvolume delete -C self/home-$d self/root-$d
+        done
+    fi
+
+    rm -f "$_tmp"
+    set +x
+}
+
 function mount_remote
 {
     typeset -n _conf="$1"
@@ -200,9 +239,7 @@ for _uuid in "${!CONF[backups][@]}"; do
     fi
 
     mount_remote "CONF" "$_uuid"
-
-    read
-
+    do_backup
     unmount_remote "CONF" "$_uuid"
     unmount_local "CONF"
 done
