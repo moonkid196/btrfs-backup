@@ -1,0 +1,2 @@
+[Service]
+ExecStart=/usr/bin/gnome-keyring-daemon -c ssh,secrets -f --unlock
