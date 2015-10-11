@@ -14,13 +14,9 @@ CONF[backups]+=(
 )
 
 CONF[dirs]=(
+    [run]="/run/btrfs-backup"
     [backups]="/run/btrfs-backup/backups"
     [self]="/run/btrfs-backup/self"
     [remote]="/run/btrfs-backup/remote"
-)
-
-CONF[adminuser]="bburke"
-CONF[env]=(
-    [DBUS_SESSION_BUS_ADDRESS]="${DBUS_SESSION_BUS_ADDRESS}"
-    [SSH_AUTH_SOCK]="/run/user/1000/keyring/ssh"
+    [home]="/var/lib/btrfs-backup"
 )

@@ -6,19 +6,29 @@
 # Tool to manage initialize and transfer btrfs backups
 #
 
+export PATH="/usr/bin:/usr/sbin"
+
 set -e
+set -o braceexpand
 
-_config=~+/config
-_dbusvar="DBUS_SESSION_BUS_ADDRESS"
-_sshvar="SSH_AUTH_SOCK"
-_remote_proto="sshfs"
-_remote_user="$(id -u)"
-_remote_host=""
-_remote_path=""
-_remote_image=""
-_luksuuid=""
-_loop=""
+# Flags
+typeset qflag="false"
 
+typeset _home="/var/lib/btrfs-backup"
+typeset _date=$(date +"%F-%H")
+
+typeset _config="$_home/config"
+
+# Defaults and global variables
+typeset _remote_proto="sshfs"
+typeset _remote_user="$(id -u)"
+typeset _remote_host=""
+typeset _remote_path=""
+typeset _remote_image=""
+typeset _luksuuid=""
+typeset _loop=""
+
+# Flags
 qflag="false"
 
 function _msg
@@ -31,26 +41,70 @@ function _err
     echo "$@" 1>&2
 }
 
+while getopts ':q' _opt; do
+    case "$_opt" in
+        "q")
+            qflag="true"
+        ;;
+        "?")
+            _err "Bad argument -$_opt"
+            # usage
+            exit 1
+    esac
+done
+
+function snapshot
+{
+    typeset -n _conf="$1"
+    typeset -n _dirs="$1[dirs]"
+
+    # Process all local backups
+    for _uuid in "${!_conf[backups][@]}"; do
+        typeset -n _backup="$1[backups][$_uuid]"
+
+        _msg "+ Processing backup id $_uuid"
+
+        mount -o subvolid=0 UUID="${_backup[localuuid]}" "${_dirs[self]}"
+        trap "umount ${_dirs[self]}" EXIT
+
+        for _vol in "${_backup[volumes][@]}"; do
+            _path="${_dirs[self]}/$_vol"
+
+            _msg "+ Snapshotting subvolume $_vol at $_date"
+            btrfs subvolume snapshot -r "$_path" "$_path-$_date" >/dev/null
+        done
+
+        trap - EXIT
+        umount "${_dirs[self]}"
+    done
+}
+
 function do_backup
 {
-    set -x
-    cd /run/btrfs-backup
-
     typeset _tmp="$(mktemp /tmp/btrfs-backup.XXXXXXXXXX)"
-    typeset _prev="$(ls -1d ~(E)backups/home-[0-9]{4}-[0-9]{2}-[0-9]{2}-[0-9]{2} | tail -n 1)"
-    _prev="$(basename ${_prev} | sed -e 's/^home-//')"
+    typeset _uuid="$2"
+    typeset -n _backup="$1[backups][$_uuid]"
+    typeset -n _dirs="$1[dirs]"
 
-    for d in ~(E)self/home-[0-9]{4}-[0-9]{2}-[0-9]{2}-[0-9]{2}; do
+    typeset _prev="$(ls -1d ${_dirs[backups]}/${_backup[volumes]}-~(E)[0-9]{4}-[0-9]{2}-[0-9]{2}-[0-9]{2} | tail -n 1)"
+    _prev="$(basename ${_prev} | sed -e s/^${_backup[volumes]}-//)"
+
+    _msg "+ Found previous remote backup: $_prev"
+
+    for d in "${_dirs[self]}/${_backup[volumes]}"-~(E)[0-9]{4}-[0-9]{2}-[0-9]{2}-[0-9]{2}; do
         _f="$(basename $d)"
-        echo "${_f##home-}"
+        echo "${_f##${_backup[volumes]}-}"
     done > "$_tmp"
 
     typeset _count=0
     for d in $(<$_tmp); do
         if [[ $d > $_prev && $_count -lt 2 ]]; then
-            btrfs send -p self/home-$_prev self/home-$d | btrfs receive backups
-            btrfs send -p self/root-$_prev self/root-$d | btrfs receive backups
-            sync
+            _msg "+ Sending backups for $d"
+
+            for v in "${_backup[volumes][@]}"; do
+                btrfs send -p "${_dirs[self]}"/$v-$_prev "${_dirs[self]}"/$v-$d 2>/dev/null | btrfs receive "${_dirs[backups]}" >/dev/null
+                sync
+            done
             _prev=$d
             _count=$(($_count + 1))
         fi
@@ -58,16 +112,22 @@ function do_backup
 
     # Check to see if we're up-to-date and local backups can be deleted
     if [[ "$_prev" == "$(tail -n 1 $_tmp)" ]]; then
+        _msg "+ Removing expired local snapshots"
+
         _local="$(wc -l $_tmp | cut -d ' ' -f 1)"
         _todel=$(($_local - 24))
 
         for d in $(head -n $_todel $_tmp); do
-            btrfs subvolume delete -C self/home-$d self/root-$d
+            _msg "+ $d"
+
+            for v in "${_backup[volumes][@]}"; do
+                btrfs subvolume delete -C "${_dirs[self]}"/$v-$d >/dev/null
+            done
         done
     fi
+    sync
 
     rm -f "$_tmp"
-    set +x
 }
 
 function mount_remote
@@ -81,8 +141,6 @@ function mount_remote
 
     case "$_remote_proto" in
         "sshfs")
-            export "$_sshvar"="${_conf[env][$_sshvar]}"
-
             _msg + Mounting \
                     ${_remote_user}@${_remote_host}:${_remote_path} \
                     on ${_conf[dirs][remote]}
@@ -106,7 +164,7 @@ function mount_remote
         _luksuuid="$(cryptsetup luksUUID $_loop)"
 
         _msg "+ Reading encryption passphrase from gnome-keyring"
-        sudo "$_dbusvar"="${_conf[env][$_dbusvar]}" -u "${_conf[adminuser]}" secret-tool lookup tool btrfs-backups > "$_tmpdir/.f"
+        secret-tool lookup tool btrfs-backup disk "$_luksuuid" > "$_tmpdir/.f"
 
         _msg "+ Opening $_loop as luks-$_luksuuid"
         cryptsetup -q open "$_loop" "luks-$_luksuuid" --key-file "$_tmpdir/.f"
@@ -189,12 +247,9 @@ function extract_remote
 
 function turn_root
 {
-    typeset -n _conf="$1"
-    shift 1
-
     if [[ $(id -u) != 0 ]]; then
         _msg "+ Changing UID: $(id -u) => 0"
-        sudo "${_dbusvar}"="${_conf[env][$_dbusvar]}" "$@"
+        sudo "$@"
         _msg "+ Exiting unprivileged shell"
         exit $?
     fi
@@ -204,29 +259,38 @@ function turn_root
 
 function mount_local
 {
-    typeset -n _conf="$1"
     typeset _uuid="$2"
+    typeset -n _backup="$1[backups][$_uuid]"
+    typeset -n _dirs="$1[dirs]"
 
-    _msg + "Mounting ${_conf[backups][$_uuid][localuuid]}" \
-            "on ${_conf[dirs][self]}"
-    mount -o subvolid=0 UUID="${_conf[backups][$_uuid][localuuid]}" \
-            "${_conf[dirs][self]}"
+    _msg + "Mounting ${_backup[localuuid]} on ${_dirs[self]}"
+    mount -o subvolid=0 UUID="${_backup[localuuid]}" "${_dirs[self]}"
 
     return $?
 }
 
 function unmount_local
 {
-    typeset -n _conf="$1"
+    typeset -n _dirs="$1[dirs]"
 
-    _msg "+ Unmounting ${_conf[dirs][self]}"
-    umount "${_conf[dirs][self]}"
+    _msg "+ Unmounting ${_dirs[self]}"
+    umount "${_dirs[self]}"
 
     return $?
 }
 
+# Become root if not already
+turn_root "$0" "$@"
+
+# Finally, read in the configuration and setup the environment
 . "$_config"
-turn_root "CONF" "$0" "$@"
+. "${CONF[dirs][run]}/dbus"
+. "${CONF[dirs][run]}/keyring"
+export SSH_AUTH_SOCK GNOME_KEYRING_CONTROL
+export HOME="${CONF[dirs][home]}"
+
+# Do local snapshots
+snapshot "CONF"
 
 for _uuid in "${!CONF[backups][@]}"; do
     mount_local "CONF" "$_uuid"
@@ -239,7 +303,7 @@ for _uuid in "${!CONF[backups][@]}"; do
     fi
 
     mount_remote "CONF" "$_uuid"
-    do_backup
+    do_backup "CONF" "$_uuid"
     unmount_remote "CONF" "$_uuid"
     unmount_local "CONF"
 done
