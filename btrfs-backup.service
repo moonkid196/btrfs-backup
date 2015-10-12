@@ -9,8 +9,13 @@ Documentation=http://github.com/moonkid196/btrfs-backup
 [Service]
 Type=simple
 ExecStart=/usr/bin/systemd-inhibit \
---what=idle:shutdown:sleep:handle-power-key:handle-suspend-key:handle-hibernate-key:handle-lid-switch \
---who=btrfs-backup \
---why="Currently backing up" \
---mode=block \
+--what idle:shutdown:sleep:handle-power-key:handle-suspend-key:handle-hibernate-key:handle-lid-switch \
+--who btrfs-backup \
+--why "Currently backing up" \
+--mode block \
 /usr/local/bin/btrfs-backup
+
+Nice=-5
+IOSchedulingClass=best-effort
+IOSchedulingPriority=0
+OOMScoreAdjust=-500
