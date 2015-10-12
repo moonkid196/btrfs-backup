@@ -6,9 +6,8 @@ Documentation=http://github.com/moonkid196/btrfs-backup
 Requisite=network.target
 
 [Timer]
-OnActiveSec=10m
-
 # For persistent uptime
+#OnActiveSec=10m
 #OnUnitActiveSec=1h
 
 # For intermittent uptime
