@@ -24,7 +24,7 @@ In addition, though *btrfs-backup* should support more slimmed-down environments
 
 Currently, all dbus/keyring tools, keys, etc need to be set up manually, every boot, but that should change soon. Additionally, the remote backups image must be set up by hand prior to this being useful. This should all be addressed in due time.
 
-## Features
+## Features!
 
 Some of the current or future design goals for this tool:
 
