@@ -1,6 +1,5 @@
 ### TODO
 
-- Move directory definitions to systemd-tmpfiles(8)
 - Generate requirements list (RPMs)
 - Need to decide if we keep state on-disk or not
 - Add in hourly job to wake up script and snapshot, etc
