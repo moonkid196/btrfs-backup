@@ -10,4 +10,7 @@
 - More usage modes (mount-only, udisks integration, et al)
 - Initialization
 - Make into a service
-- test usb, nfs operation
+- Test usb, nfs operation
+- Critical threshold of local snapshots, where it starts skipping over some to better catch up.
+- Always-on vs. intermittent operation (to configure the systemd.timer)
+- Randomization of timer activation min:sec when using calendar time
