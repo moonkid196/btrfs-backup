@@ -1,0 +1,19 @@
+[Unit]
+Description=Service to fire off a btrfs-backup
+Documentation=http://github.com/moonkid196/btrfs-backup
+
+# Configured for network backups
+Requisite=network.target
+
+[Timer]
+OnActiveSec=10m
+
+# For persistent uptime
+#OnUnitActiveSec=1h
+
+# For intermittent uptime
+OnCalendar=*:23:59
+Persistent=true
+
+[Install]
+WantedBy=timers.target

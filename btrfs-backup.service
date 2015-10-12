@@ -1,0 +1,16 @@
+[Unit]
+Description=Tool to create local snapshots and backups
+Documentation=http://github.com/moonkid196/btrfs-backup
+
+# Possibility for laptops
+# Perhaps, only do a local snapshot if not connected?
+#ConditionACPower=true
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/systemd-inhibit \
+--what=idle:shutdown:sleep:handle-power-key:handle-suspend-key:handle-hibernate-key:handle-lid-switch \
+--who=btrfs-backup \
+--why="Currently backing up" \
+--mode=block \
+/usr/local/bin/btrfs-backup
