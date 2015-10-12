@@ -30,7 +30,7 @@ Some of the current or future design goals for this tool:
 
 - Keep 24 (configurable) local snapshots
 - Push snapshots regularly to remote filesystem image
-- Remote image encryption
+- Remote image encryption and compression
 - Support for several remote image access mechanisms (*sshfs*, *nfs*, *USB*-attached disk)
 - Snapshot-only support when not plugged in (configurable)
 - Some gvfs integration for non-admin browsing
