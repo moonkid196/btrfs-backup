@@ -41,18 +41,6 @@ function _err
     echo "$@" 1>&2
 }
 
-while getopts ':q' _opt; do
-    case "$_opt" in
-        "q")
-            qflag="true"
-        ;;
-        "?")
-            _err "Bad argument -$_opt"
-            # usage
-            exit 1
-    esac
-done
-
 function snapshot
 {
     typeset -n _conf="$1"
@@ -181,6 +169,8 @@ function unmount_remote
 {
     typeset -n _conf="$1"
     typeset _uuid="$2"
+    typeset _loop="$(losetup -j ${_conf[dirs][remote]}/$_remote_image | cut -d : -f 1)"
+    typeset _luksuuid="$(cryptsetup luksUUID $_loop)"
 
     _msg "+ Unmounting ${_conf[dirs][backups]}"
     umount "${_conf[dirs][backups]}"
@@ -279,31 +269,92 @@ function unmount_local
     return $?
 }
 
+while getopts ':q' _opt; do
+    case "$_opt" in
+        "q")
+            qflag="true"
+        ;;
+        "?")
+            _err "Bad argument -$_opt"
+            # usage
+            exit 1
+        ;;
+    esac
+done
+shift $(($OPTIND - 1))
+
 # Become root if not already
 turn_root "$0" "$@"
 
-# Finally, read in the configuration and setup the environment
+# Get config
 . "$_config"
 . "${CONF[dirs][run]}/dbus"
 . "${CONF[dirs][run]}/keyring"
 export SSH_AUTH_SOCK GNOME_KEYRING_CONTROL
 export HOME="${CONF[dirs][home]}"
 
-# Do local snapshots
-snapshot "CONF"
+case "$1" in
+    "list")
+        for _uuid in "${!CONF[backups][@]}"; do
+            printf "UUID=%s, URI=%s\n" "$_uuid" "${CONF[backups][$_uuid][uri]}"
+        done
+    ;;
+    "snapshot")
+        snapshot "CONF"
+    ;;
+    "mount")
+        if [[ -z "$2" ]]; then
+            _err "usage: $0 mount {UUID}"
+            exit 1
+        fi
 
-for _uuid in "${!CONF[backups][@]}"; do
-    mount_local "CONF" "$_uuid"
+        typeset _uuid="$2"
 
-    if ! extract_remote "CONF" "$_uuid"; then
-        _err "Failed to parse URI = ${CONF[backups][$_uuid][uri]}"
-        _err "Trying next backup"
+        if ! extract_remote "CONF" "$_uuid"; then
+            _err "Failed to parse URI = ${CONF[backups][$_uuid][uri]}"
+            _err "Trying next backup"
+            exit 1
+        fi
+
+        mount_local "CONF" "$_uuid"
+        mount_remote "CONF" "$_uuid"
+    ;;
+    "unmount")
+        if [[ -z "$2" ]]; then
+            _err "usage: $0 mount {UUID}"
+            exit 1
+        fi
+
+        typeset _uuid="$2"
+
+        if ! extract_remote "CONF" "$_uuid"; then
+            _err "Failed to parse URI = ${CONF[backups][$_uuid][uri]}"
+            _err "Trying next backup"
+            exit 1
+        fi
+
+        unmount_remote "CONF" "$_uuid"
         unmount_local "CONF"
-        continue
-    fi
+    ;;
+    *)
+        snapshot "CONF"
 
-    mount_remote "CONF" "$_uuid"
-    do_backup "CONF" "$_uuid"
-    unmount_remote "CONF" "$_uuid"
-    unmount_local "CONF"
-done
+        for _uuid in "${!CONF[backups][@]}"; do
+            mount_local "CONF" "$_uuid"
+
+            if ! extract_remote "CONF" "$_uuid"; then
+                _err "Failed to parse URI = ${CONF[backups][$_uuid][uri]}"
+                _err "Trying next backup"
+                unmount_local "CONF"
+                continue
+            fi
+
+            mount_remote "CONF" "$_uuid"
+            do_backup "CONF" "$_uuid"
+            unmount_remote "CONF" "$_uuid"
+            unmount_local "CONF"
+        done
+    ;;
+esac
+
+exit 0
