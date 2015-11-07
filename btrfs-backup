@@ -6,7 +6,8 @@
 # Tool to manage initialize and transfer btrfs backups
 #
 
-export PATH="/usr/bin:/usr/sbin"
+export PATH="/usr/local/libexec/btrfs-backup:/usr/bin:/usr/sbin"
+umask 077
 
 set -e
 set -o braceexpand
@@ -41,30 +42,41 @@ function _err
     echo "$@" 1>&2
 }
 
-function snapshot
+function init
 {
-    typeset -n _conf="$1"
     typeset -n _dirs="$1[dirs]"
 
-    # Process all local backups
-    for _uuid in "${!_conf[backups][@]}"; do
-        typeset -n _backup="$1[backups][$_uuid]"
+    typeset _dbus="${_dirs[run]}/dbus"
+    typeset _keyring="${_dirs[run]}/keyring"
+    typeset _home="${_dirs[home]}"
 
-        _msg "+ Processing backup id $_uuid"
+    _msg "+ Starting dbus session"
+    dbus-launch --sh-syntax > "$_dbus"
+    source "$_dbus"
 
-        mount -o subvolid=0 UUID="${_backup[localuuid]}" "${_dirs[self]}"
-        trap "umount ${_dirs[self]}" EXIT
+    _msg "+ Starting the Gnome keyring"
+    ask | gnome-keyring-daemon --unlock -c secrets,ssh -d > "$_keyring"
+}
 
-        for _vol in "${_backup[volumes][@]}"; do
-            _path="${_dirs[self]}/$_vol"
+function snapshot
+{
+    typeset _uuid="$2"
+    typeset -n _conf="$1[backups][$_uuid]"
+    typeset -n _dirs="$1[dirs]"
 
-            _msg "+ Snapshotting subvolume $_vol at $_date"
-            btrfs subvolume snapshot -r "$_path" "$_path-$_date" >/dev/null
-        done
+    typeset _vol=""
+    typeset _path=""
 
-        trap - EXIT
-        umount "${_dirs[self]}"
+    _msg "+ Snapshotting backup with id $_uuid"
+
+    for _vol in "${_conf[volumes][@]}"; do
+        _path="${_dirs[self]}/$_vol"
+
+        _msg "+ Snapshotting subvolume $_vol at $_date"
+        btrfs subvolume snapshot -r "$_path" "$_path-$_date" >/dev/null
     done
+
+    return 0
 }
 
 function do_backup
@@ -120,21 +132,27 @@ function do_backup
 
 function mount_remote
 {
-    typeset -n _conf="$1"
     typeset _uuid="$2"
+    typeset -n _conf="$1[backups][$_uuid]"
+    typeset -n _dirs="$1[dirs]"
     typeset _tmpdir
     typeset _dev
-
-    _loop=$(losetup -f)
+    typeset _loop=$(losetup -f)
 
     case "$_remote_proto" in
         "sshfs")
+            _msg "+ Checking if $_remote_host is alive"
+            if ! ping -qn -c 4 -w 6 "$_remote_host" >/dev/null; then
+                _err "ERROR: Could not contact $_remote_host"
+                return 1
+            fi
+
             _msg + Mounting \
                     ${_remote_user}@${_remote_host}:${_remote_path} \
-                    on ${_conf[dirs][remote]}
+                    on ${_dirs[remote]}
 
             sshfs "${_remote_user}@${_remote_host}:${_remote_path}" \
-                    "${_conf[dirs][remote]}"
+                    "${_dirs[remote]}"
 
         ;;
         *)
@@ -144,10 +162,10 @@ function mount_remote
     esac
 
     _msg "+ Mapping $_remote_image to $_loop"
-    losetup "$_loop" "${CONF[dirs][remote]}/$_remote_image"
+    losetup "$_loop" "${_dirs[remote]}/$_remote_image"
     _dev="$_loop"
 
-    if "${_conf[backups][$_uuid][encrypted]}"; then
+    if "${_conf[encrypted]}"; then
         _tmpdir="$(mktemp -d /dev/shm/btrfs-backups.XXXXXXXXXX)"
         _luksuuid="$(cryptsetup luksUUID $_loop)"
 
@@ -161,8 +179,8 @@ function mount_remote
 
     fi
 
-    _msg "+ Mounting $_dev on ${_conf[dirs][backups]}"
-    mount -o compress,subvolid=0 "$_dev" "${_conf[dirs][backups]}"
+    _msg "+ Mounting $_dev on ${_dirs[backups]}"
+    mount -o compress,subvolid=0 "$_dev" "${_dirs[backups]}"
 }
 
 function unmount_remote
@@ -197,9 +215,9 @@ function unmount_remote
 
 function extract_remote
 {
-    typeset -n _conf="$1"
     typeset _uuid="$2"
-    typeset _uri="${_conf[backups][$_uuid][uri]}"
+    typeset -n _conf="$1[backups][$_uuid]"
+    typeset _uri="${_conf[uri]}"
 
     if [[ "$_uri" =~ ^([a-z]+)://(.*)$ ]]; then
         _remote_proto="${.sh.match[1]}"
@@ -219,18 +237,14 @@ function extract_remote
         _remote_host="${.sh.match[1]}"
         _remote_path="${.sh.match[2]}"
         _remote_image="${.sh.match[3]}"
+    else
+        _err "ERROR: Failed to parse $_uri"
+        return 1
     fi
 
     _msg "+ Setting _remote_host to $_remote_host"
     _msg "+ Setting _remote_path to $_remote_path"
     _msg "+ Setting _remote_image to $_remote_image"
-
-    if [[ -z "$_remote_host" || -z "$_remote_path" || \
-          -z "$_remote_image" ]]; then
-        return 1
-    fi
-
-    ping -nqc 1 -W 5 "$_remote_host" >/dev/null || return 1
 
     return 0
 }
@@ -288,20 +302,43 @@ turn_root "$0" "$@"
 
 # Get config
 . "$_config"
-. "${CONF[dirs][run]}/dbus"
-. "${CONF[dirs][run]}/keyring"
-export SSH_AUTH_SOCK GNOME_KEYRING_CONTROL
 export HOME="${CONF[dirs][home]}"
 
+# Pre-backup works
 case "$1" in
+    "init")
+        init CONF
+        exit 0
+    ;;
     "list")
         for _uuid in "${!CONF[backups][@]}"; do
             printf "UUID=%s, URI=%s\n" "$_uuid" "${CONF[backups][$_uuid][uri]}"
         done
+
+        exit 0
     ;;
     "snapshot")
-        snapshot "CONF"
+        for _uuid in "${!CONF[backups][@]}"; do
+            mount_local "CONF" "$_uuid"
+            trap "unmount_local CONF $_uuid; continue" ERR
+
+            snapshot "CONF" "$_uuid"
+
+            trap - ERR
+            unmount_local "CONF"
+        done
+
+        exit 0
     ;;
+esac
+
+# Get the rest of the configuration for the operations that may require the
+# keyring
+. "${CONF[dirs][run]}/dbus"
+. "${CONF[dirs][run]}/keyring"
+export SSH_AUTH_SOCK GNOME_KEYRING_CONTROL
+
+case "$1" in
     "mount")
         if [[ -z "$2" ]]; then
             _err "usage: $0 mount {UUID}"
@@ -310,13 +347,11 @@ case "$1" in
 
         typeset _uuid="$2"
 
-        if ! extract_remote "CONF" "$_uuid"; then
-            _err "Failed to parse URI = ${CONF[backups][$_uuid][uri]}"
-            _err "Trying next backup"
-            exit 1
-        fi
+        extract_remote "CONF" "$_uuid" || exit 1
 
         mount_local "CONF" "$_uuid"
+        trap "mount_local \"CONF\" \"$_uuid\"" ERR
+
         mount_remote "CONF" "$_uuid"
     ;;
     "unmount")
@@ -327,33 +362,31 @@ case "$1" in
 
         typeset _uuid="$2"
 
-        if ! extract_remote "CONF" "$_uuid"; then
-            _err "Failed to parse URI = ${CONF[backups][$_uuid][uri]}"
-            _err "Trying next backup"
-            exit 1
-        fi
-
+        extract_remote "CONF" "$_uuid" || exit 1
+        trap "mount_local \"CONF\" \"$_uuid\"" ERR
         unmount_remote "CONF" "$_uuid"
         unmount_local "CONF"
     ;;
     *)
-        snapshot "CONF"
+        echo $$ > "${CONF[dirs][run]}/backup.pid"
 
         for _uuid in "${!CONF[backups][@]}"; do
             mount_local "CONF" "$_uuid"
+            trap "unmount_local CONF $_uuid; continue" ERR
 
-            if ! extract_remote "CONF" "$_uuid"; then
-                _err "Failed to parse URI = ${CONF[backups][$_uuid][uri]}"
-                _err "Trying next backup"
-                unmount_local "CONF"
-                continue
-            fi
+            snapshot "CONF" "$_uuid"
 
+            extract_remote "CONF" "$_uuid"
             mount_remote "CONF" "$_uuid"
+            trap "unmount_remote CONF $_uuid; unmount_local CONF; continue" ERR
+
             do_backup "CONF" "$_uuid"
+            trap - ERR
+
             unmount_remote "CONF" "$_uuid"
             unmount_local "CONF"
         done
+        rm -f "${CONF[dirs][run]}/backup.pid"
     ;;
 esac
 

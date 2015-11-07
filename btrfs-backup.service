@@ -1,13 +1,21 @@
 [Unit]
 Description=Tool to create local snapshots and backups
 Documentation=http://github.com/moonkid196/btrfs-backup
+Requires=btrfs-keyring.service
 
 # Possibility for laptops
 # Perhaps, only do a local snapshot if not connected?
 #ConditionACPower=true
+ConditionPathExists=/run/btrfs-backup/keyring
+ConditionPathExists=/run/btrfs-backup/dbus
+
+# Configured for network backups
+Requisite=network.target
 
 [Service]
 Type=simple
+PIDFile=/run/btrfs-backup/backup.pid
+ExecStartPre=/usr/bin/sleep 10
 ExecStart=/usr/bin/systemd-inhibit \
 --what idle:shutdown:sleep:handle-power-key:handle-suspend-key:handle-hibernate-key:handle-lid-switch \
 --who btrfs-backup \

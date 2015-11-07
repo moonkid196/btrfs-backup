@@ -1,2 +1,10 @@
+[Unit]
+Description=Starts the private dbus/keyring for btrfs-backup
+Documentation=http://github.com/moonkid196/btrfs-backup
+
 [Service]
-ExecStart=/usr/bin/gnome-keyring-daemon -c ssh,secrets -f --unlock
+Type=forking
+ExecStart=/usr/local/bin/btrfs-backup init
+
+[Install]
+WantedBy=multi-user.target

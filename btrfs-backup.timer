@@ -1,9 +1,7 @@
 [Unit]
 Description=Service to fire off a btrfs-backup
 Documentation=http://github.com/moonkid196/btrfs-backup
-
-# Configured for network backups
-Requisite=network.target
+Requires=btrfs-keyring.service
 
 [Timer]
 # For persistent uptime
