@@ -1,7 +1,8 @@
 [Unit]
 Description=Service to fire off a btrfs-backup
 Documentation=http://github.com/moonkid196/btrfs-backup
-Requires=btrfs-keyring.service
+After=btrfs-keyring.service
+PartOf=btrfs-keyring.service
 
 [Timer]
 # For persistent uptime

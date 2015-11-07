@@ -13,21 +13,26 @@ NotAfter=0
 
 sock = '/run/btrfs-backup/ask'
 
-s = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM)
-s.bind(sock)
+try:
+    s = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM)
+    s.bind(sock)
 
-fo = open('/run/systemd/ask-password/ask.btrfs-backup', 'w')
-for l in fcontent:
-    fo.write(l)
-fo.close()
+    fo = open('/run/systemd/ask-password/ask.btrfs-backup', 'w')
+    for l in fcontent:
+        fo.write(l)
+    fo.close()
 
-resp = s.recv(1024)
-s.close()
-os.unlink('/run/btrfs-backup/ask')
-os.unlink('/run/systemd/ask-password/ask.btrfs-backup')
+    resp = s.recv(1024)
+    s.close()
+    os.unlink('/run/btrfs-backup/ask')
+    os.unlink('/run/systemd/ask-password/ask.btrfs-backup')
 
-if resp[0] == '-':
-    sys.stderr.write('Failed to read in btrfs-backup password')
+    if resp[0] == '-':
+        sys.stderr.write('Failed to read in btrfs-backup password')
+        raise SystemExit(1)
+
+    sys.stdout.write(resp[1:])
+except:
+    os.unlink('/run/btrfs-backup/ask')
+    os.unlink('/run/systemd/ask-password/ask.btrfs-backup')
     raise SystemExit(1)
-
-sys.stdout.write(resp[1:])

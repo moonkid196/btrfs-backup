@@ -2,6 +2,7 @@
 Description=Tool to create local snapshots and backups
 Documentation=http://github.com/moonkid196/btrfs-backup
 Requires=btrfs-keyring.service
+After=btrfs-keyring.service
 
 # Possibility for laptops
 # Perhaps, only do a local snapshot if not connected?

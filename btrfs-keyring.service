@@ -1,6 +1,7 @@
 [Unit]
 Description=Starts the private dbus/keyring for btrfs-backup
 Documentation=http://github.com/moonkid196/btrfs-backup
+After=systemd-tmpfiles-setup.service
 
 [Service]
 Type=forking
