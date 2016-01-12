@@ -1,8 +1,7 @@
 [Unit]
 Description=Service to fire off a btrfs-backup
 Documentation=http://github.com/moonkid196/btrfs-backup
-After=btrfs-keyring.service
-PartOf=btrfs-keyring.service
+Requires=btrfs-keyring.service
 
 [Timer]
 # For persistent uptime
@@ -14,4 +13,4 @@ OnCalendar=*:23:59
 Persistent=true
 
 [Install]
-WantedBy=timers.target
+WantedBy=multi-user.target
