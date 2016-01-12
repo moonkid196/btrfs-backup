@@ -28,6 +28,7 @@ typeset _remote_path=""
 typeset _remote_image=""
 typeset _luksuuid=""
 typeset _loop=""
+typeset _num_backups="2"
 
 # Flags
 qflag="false"
@@ -42,7 +43,7 @@ function _err
     echo "$@" 1>&2
 }
 
-function init
+function keyring
 {
     typeset -n _dirs="$1[dirs]"
 
@@ -98,7 +99,7 @@ function do_backup
 
     typeset _count=0
     for d in $(<$_tmp); do
-        if [[ $d > $_prev && $_count -lt 2 ]]; then
+        if [[ $d > $_prev && $_count -lt "$_num_backups" ]]; then
             _msg "+ Sending backups for $d"
 
             for v in "${_backup[volumes][@]}"; do
@@ -306,8 +307,8 @@ export HOME="${CONF[dirs][home]}"
 
 # Pre-backup works
 case "$1" in
-    "init")
-        init CONF
+    "keyring")
+        keyring CONF
         exit 0
     ;;
     "list")
@@ -317,10 +318,10 @@ case "$1" in
 
         exit 0
     ;;
-    "snapshot")
+    "snapshot"|"")
         for _uuid in "${!CONF[backups][@]}"; do
             mount_local "CONF" "$_uuid"
-            trap "unmount_local CONF $_uuid; continue" ERR
+            trap "unmount_local CONF; continue" ERR
 
             snapshot "CONF" "$_uuid"
 
@@ -328,7 +329,9 @@ case "$1" in
             unmount_local "CONF"
         done
 
-        exit 0
+        if [[ "$1" == "snapshot" ]]; then
+            exit 0
+        fi
     ;;
 esac
 
@@ -347,34 +350,41 @@ case "$1" in
 
         typeset _uuid="$2"
 
-        extract_remote "CONF" "$_uuid" || exit 1
+        extract_remote "CONF" "$_uuid"
 
         mount_local "CONF" "$_uuid"
-        trap "mount_local \"CONF\" \"$_uuid\"" ERR
+        trap "unmount_local CONF" ERR
 
         mount_remote "CONF" "$_uuid"
     ;;
     "unmount")
         if [[ -z "$2" ]]; then
-            _err "usage: $0 mount {UUID}"
+            _err "usage: $0 unmount {UUID}"
             exit 1
         fi
 
         typeset _uuid="$2"
 
-        extract_remote "CONF" "$_uuid" || exit 1
-        trap "mount_local \"CONF\" \"$_uuid\"" ERR
+        # Relax error-handling for this operation
+        set +e
+
+        extract_remote "CONF" "$_uuid"
         unmount_remote "CONF" "$_uuid"
         unmount_local "CONF"
     ;;
-    *)
-        echo $$ > "${CONF[dirs][run]}/backup.pid"
+    "backup"|"")
+        if [[ "$1" == "backup" ]]; then
+            _num_backups=$(($_num_backups * 2))
+        fi
+
+        # Is this being run non-interactively?
+        if [[ ! -t 1 ]]; then
+            echo $$ > "${CONF[dirs][run]}/backup.pid"
+        fi
 
         for _uuid in "${!CONF[backups][@]}"; do
             mount_local "CONF" "$_uuid"
-            trap "unmount_local CONF $_uuid; continue" ERR
-
-            snapshot "CONF" "$_uuid"
+            trap "unmount_local CONF; continue" ERR
 
             extract_remote "CONF" "$_uuid"
             mount_remote "CONF" "$_uuid"
@@ -387,6 +397,10 @@ case "$1" in
             unmount_local "CONF"
         done
         rm -f "${CONF[dirs][run]}/backup.pid"
+    ;;
+    *)
+        _err "usage: $0 [snapshot|mount|unmount|list] [...]"
+        exit 1
     ;;
 esac
 
