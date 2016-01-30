@@ -50,7 +50,7 @@ class btrfs_backup:
 
         # Global Arguments/Switches
         parser.add_argument('-q', '--quiet', \
-            action='store_true', dest='quiet', default=False, \
+            action='store_true', dest='quiet', default=not sys.stdout.isatty(), \
             help='If specified, do not print status messages')
         parser.add_argument('-f', dest='file', default=CONFIGFILE,\
             help='Specify alternate configuration file (default is %s)' % \
@@ -131,12 +131,12 @@ class btrfs_backup:
     def run(self):
         '''Method to execute the command given'''
 
-        if self.args.verb == 'keyring':
-            self.keyring()
-            return
-
         if self.args.verb == 'list':
             self.list()
+            return
+
+        if self.args.verb == 'keyring':
+            self.keyring()
             return
 
         if self.args.verb == 'snapshot':
@@ -242,6 +242,8 @@ NotAfter=0
             print('UUID=%s, URI=%s' % (uuid, self.CONF['backups'][uuid]['uri']))
 
     def snapshot(self):
+        '''Snapshot all local disks'''
+
         # Easier referencing
         dirs = self.CONF['dirs']
 
@@ -250,27 +252,77 @@ NotAfter=0
 
             self.pr('+ Snapshotting backup with id %s' % uuid)
 
-            returncode = subprocess.call(('mount', '-o', 'subvolid=0', \
-                'UUID=%s' % backup['localuuid'], dirs['self']))
-            if returncode != 0:
-                raise Exception('Mounting local filesystem failed')
+            self.mount(backup['localuuid'], dirs['self'])
 
             try:
                 for vol in backup['volumes']:
                     self.pr('+ Snapshotting subvolume %s at %s' % (vol, self.DATE))
                     path = os.path.join(dirs['self'], vol)
+                    snap = '%s-%s' % (path, self.DATE)
 
-                    returncode = subprocess.call(('btrfs', 'subvolume', \
-                        'snapshot', '-r', path, '%s-%s' % (path, self.DATE)),
-                        stdout=open(os.devnull, 'w'))
+                    self.btrfs_snapshot(path, snap)
 
-                    if returncode != 0:
-                        raise Exception('Failed to snapshot volume %s' % vol)
             except:
                 raise
 
             finally:
-                subprocess.call(('umount', dirs['self']))
+                self.unmount(dirs['self'])
+        return
+
+    def btrfs_snapshot(self, path, snap, readonly=True):
+        '''
+Do a btrfs snapshot operation
+
+Arguments:
+  path = path to the subvolume
+  snap = path to the snapshot
+  readonly = (Default True) whether to make a readonly snapshot
+'''
+        # Confirm that snapshot and subvolume are on the same device
+        dir0 = os.path.dirname(path)
+        dir1 = os.path.dirname(snap)
+        if os.lstat(dir0).st_dev != os.lstat(dir1).st_dev:
+            raise Exception('%s and %s wouldn\'t be on the same device')
+
+        returncode = subprocess.call(
+            ('btrfs', 'subvolume', 'snapshot', '-r', path, snap), \
+            stdout=subprocess.DEVNULL)
+
+        if returncode != 0:
+            raise Exception('Failed to snapshot volume %s' % path)
+
+        return
+
+    def mount(self, src, path, uuid=True, opts='subvolid=0'):
+        '''
+Mount a device
+
+Arguments:
+  src  = Device to mount
+  path = Mountpoint
+  uuid = 'src' argument is a UUID (Default True)
+  opts = Mount options (Default "subvolid=0")
+'''
+
+        if uuid:
+            src = 'UUID=%s' % src
+
+        returncode = subprocess.call(('mount', '-o', opts, src, path))
+        if returncode != 0:
+            raise Exception('Mounting local filesystem failed')
+
+        return
+
+    def unmount(self, mountpoint):
+        '''Unmount a device'''
+
+        if not os.path.ismount(mountpoint):
+            raise Exception('%s is not a mount point' % mountpoint)
+
+        returncode = subprocess.call(('umount', mountpoint))
+        if returncode != 0:
+            raise Exception('Failed to unmount %s' % mountpoint)
+
         return
 
 
@@ -299,8 +351,4 @@ if __name__ == '__main__':
     except Exception as e:
         if not qflag:
             print('+ Got Exception %s: %s' % (e.__class__.__name__, str(e)))
-        raise SystemExit(1)
-
-    except:
-        print('An unknown error occurred; Exiting', file=sys.stderr)
         raise SystemExit(1)
