@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 import argparse
+import collections
 import json
 import os
 import os.path
@@ -8,8 +9,11 @@ import time
 import subprocess
 import socket
 import sys
+import tempfile
+from urllib.parse import urlparse
+import uuid
 
-qflag = False
+qflag = not sys.stdout.isatty()
 
 class btrfs_backup:
 
@@ -18,7 +22,7 @@ class btrfs_backup:
     DATE = time.localtime()
     CONFIGFILE = HOME + '/config'
     CONF = None
-    qflag = False
+    qflag = not sys.stdout.isatty()
 
     class PrivilegedExit(Exception):
         '''Raised when the privileged version of this process/class exits'''
@@ -49,10 +53,14 @@ class btrfs_backup:
             description='Tool to manage backups of Btrfs filesystems')
 
         # Global Arguments/Switches
-        parser.add_argument('-q', '--quiet', \
-            action='store_true', dest='quiet', default=not sys.stdout.isatty(), \
-            help='If specified, do not print status messages')
-        parser.add_argument('-f', dest='file', default=CONFIGFILE,\
+        vq = parser.add_mutually_exclusive_group()
+        vq.add_argument('-q', '--quiet', action='store_true', dest='quiet', \
+            default=False, help='If specified, do not print status messages')
+        vq.add_argument('-v', '--verbose', dest='verbose', \
+            action='store_true', default=False, \
+            help='If specified, print status messages')
+
+        parser.add_argument('-f', dest='file', default=CONFIGFILE, nargs=1, \
             help='Specify alternate configuration file (default is %s)' % \
             CONFIGFILE)
         subparsers = parser.add_subparsers(dest='verb', \
@@ -70,9 +78,21 @@ class btrfs_backup:
         verb_snapshot = subparsers.add_parser('snapshot', \
             help='Snapshot local filesystem(s)')
 
+        # Mount a backup
+        verb_mount = subparsers.add_parser('mount', \
+            help='Mount the disks for a backup')
+        verb_mount.add_argument('mount_uuid', type=uuid.UUID, \
+            metavar='UUID', nargs=1, help='UUID of the backup to mount')
+
         self.args = parser.parse_args(args)
-        self.qflag = self.args.quiet
-        self.CONFIGFILE = self.args.file
+
+        if self.args.quiet:
+            self.qflag = True
+
+        if self.args.verbose:
+            self.qflag = False
+
+        self.CONFIGFILE = self.args.file[0]
 
         return
 
@@ -139,11 +159,215 @@ class btrfs_backup:
             self.keyring()
             return
 
+        if self.args.verb == 'mount':
+            self.keyring()
+            self.mount(self.args.mount_uuid[0])
+            return
+
         if self.args.verb == 'snapshot':
             self.snapshot()
             return
 
         return
+
+    def mount(self, uuid):
+        '''Method to handle mounting the disks for a backup'''
+
+        uuid = str(uuid)
+        if uuid not in self.CONF['backups'].keys():
+            raise Exception('%s not a valid backup UUID' % uuid)
+
+        backup = self.CONF['backups'][uuid]
+        dirs   = self.CONF['dirs']
+
+        self.cmd_mount(backup['localuuid'], dirs['self'])
+        remote = self.parseuri(uuid)
+
+        if remote.protocol == 'sshfs':
+            self.pr('+ Checking if %s is alive' % remote.host)
+            if not self.isalive(remote.host):
+                raise Exception('Host %s could not be reached' % remote.host)
+
+            self.pr('+ Mounting %s on %s' % (backup['uri'], dirs['remote']))
+            returncode = subprocess.call(('sshfs', '%s@%s:%s' % \
+                (remote.user, remote.host, remote.path), \
+                dirs['remote']), stdout=subprocess.DEVNULL)
+            if returncode != 0:
+                raise Exception('Failed to mount %s' % backup['uri'])
+
+        else:
+            raise Exception('Unknown protocol: %s' % remote.protocol)
+
+        image = os.path.join(dirs['remote'], remote.image)
+        self.pr('+ Mapping %s to loop device' % image)
+        device = self.losetup(image)
+
+        if backup['encrypt']:
+            luksUUID = self.luksUUID(device)
+            luksdev  = 'luks-%s' % luksUUID
+
+            self.pr('+ Reading encryption passphrase from gnome-keyring')
+            pw = self.get_secret('disk', luksUUID)
+
+            self.pr('+ Opening %s as %s' % (device, luksdev))
+            self.cryptsetup('open', luksdev, device, pw)
+            device = os.path.join('/dev/mapper', luksdev)
+
+        self.pr('+ Mounting %s on %s' % (device, dirs['backups']))
+
+        if backup['compress']:
+            self.cmd_mount(device, dirs['backups'], uuid=False, \
+                opts='subvolid=0,compress')
+        else:
+            self.cmd_mount(device, dirs['backups'], uuid=False)
+
+        return
+
+    def luksUUID(self, device):
+        '''Method to return the UUID of a LUKS device'''
+
+        try:
+            output = subprocess.check_output(\
+                ('cryptsetup', 'luksUUID', device)).decode()
+
+            # Sanity-checking the UUID
+            myuuid = uuid.UUID(output.strip())
+
+            self.pr('+ Found UUID %s for %s' % (str(myuuid), device))
+            return str(myuuid)
+
+        except subprocess.CalledProcessError:
+            raise Exception('cryptsetup failed to produce a UUID')
+
+    def get_secret(self, k, v):
+        '''Method to look up secrets using secret-tool'''
+
+        try:
+            output = subprocess.check_output(\
+                ('secret-tool', 'lookup', 'tool', 'btrfs-backup', k, v)\
+                ).decode()
+
+            return output.strip()
+
+        except subprocess.CalledProcessError:
+            raise Exception('Failed to read from the gnome-keychain')
+
+    def cryptsetup(self, verb, luksdev, src=None, pw=None):
+        '''Method to open/close LUKS devices'''
+
+        if verb == 'open':
+            if pw is None:
+                raise Exception('Requested to open LUKS device with no password')
+            if src is None:
+                raise Exception('Requested to open LUKS device with no source device')
+
+            with tempfile.TemporaryDirectory(dir='/dev/shm') as d:
+                pfile = os.path.join(d, 'pfile')
+                with open(pfile, 'w') as f:
+                    f.write(pw)
+
+                returncode = subprocess.call(('cryptsetup', '-q', 'open', \
+                    src, luksdev, '--key-file', pfile))
+                if returncode != 0:
+                    raise Exception('Failed to open/decrypt %s' % src)
+
+        elif verb == 'close':
+            returncode = subprocess.call(('cryptsetup', 'close', luksdev))
+            if returncode != 0:
+                raise Exception('Failed to close %s' % luksdev)
+
+        else:
+            raise Exception('Got unknown verb %s in cryptsetup')
+
+        return
+
+    def losetup(self, image, delete=False):
+        '''Method to interact with the losetup tool'''
+
+        loopdev = None
+
+        try:
+            output = subprocess.check_output(('losetup', '--raw', \
+                '--noheadings', '--list')).decode()
+
+            for line in output.splitlines():
+                loop = line.split()
+                if loop[-1] == image:
+                    loopdev = loop[0]
+                    self.pr('+ Found mapping %s => %s' % (image, loopdev))
+
+            if delete:
+                if loopdev is None:
+                    print('WARNING: %s is not mapped to any loop devices', \
+                        file=sys.stderr, flush=True)
+                    return
+
+                self.pr('+ Deleting %s' % loopdev)
+                returncode = subprocess.call(('losetup', '-d', loopdev))
+                if returncode != 0:
+                    raise Exception('losetup -d %s returned non-zero' % loopdev)
+                return
+
+            returncode = subprocess.call(('losetup', '-f', image))
+            if returncode != 0:
+                raise Exception('losetup -f %s returned non-zero' % image)
+
+            output = subprocess.check_output(('losetup', '--raw', \
+                '--noheadings', '--list')).decode()
+
+            for line in output.splitlines():
+                loop = line.split()
+                if loop[-1] == image:
+                    loopdev = loop[0]
+                    self.pr('+ Mapped %s => %s' % (image, loopdev))
+                    return loopdev
+
+            raise Exception('losetup did not fail, but file never got mapped')
+
+        except subprocess.CalledProcessError:
+            raise Exception('losetup returned non-zero')
+
+    def parseuri(self, uuid):
+        uri = collections.namedtuple('uri', \
+            ['protocol', 'user', 'host', 'path', 'image'])
+        o = urlparse(self.CONF['backups'][uuid]['uri'])
+
+        protocol = None
+        user     = None
+        host     = None
+        path     = None
+        image    = None
+
+        self.pr('+ Setting remote protocol to %s' % o.scheme)
+        protocol = o.scheme
+
+        self.pr('+ Setting remote path to %s' % os.path.dirname(o.path))
+        path     = os.path.dirname(o.path)
+
+        self.pr('+ Setting remote image to %s' % os.path.basename(o.path))
+        image    = os.path.basename(o.path)
+
+        res = o.netloc.rpartition('@')
+
+        self.pr('+ Setting remote host to %s' % res[2])
+        host = res[2]
+
+        if res[0] != '':
+            self.pr('+ Setting remote user to %s' % res[0])
+            user = res[0]
+
+        remote = uri(protocol, user, host, path, image)
+        return remote
+
+    def isalive(self, host):
+        '''Effectively runs "ping -qn -c 4 -w 6" against the remote host'''
+
+        args = ('ping', '-q', '-n', '-c', '4', '-w', '6', host)
+        returncode = subprocess.call(args, stdout=subprocess.DEVNULL)
+        if returncode != 0:
+            return False
+
+        return True
 
     def keyring(self):
         '''Method which starts the keyring/dbus session'''
@@ -153,6 +377,27 @@ class btrfs_backup:
         dbus    = os.path.join(dirs['run'], 'dbus')
         keyring = os.path.join(dirs['run'], 'keyring')
         home    = dirs['home']
+
+        # Check for existing keyring
+        if os.path.exists(dbus) and os.path.exists(keyring):
+            self.pr('+ Found existing keyring')
+
+            with open(dbus, 'r') as f:
+                for line in f.readlines():
+                    k,s,v = line.strip().partition('=')
+                    self.pr('+ %s=%s' % (k, v))
+
+                    if k == 'DBUS_SESSION_BUS_ADDRESS':
+                        os.environ[k] = v
+
+            with open(keyring, 'r') as f:
+                for line in f.readlines():
+                    k,s,v = line.strip().partition('=')
+                    self.pr('+ Found %s=%s' % (k, v))
+
+                os.environ[k] = v
+
+            return
 
         # Start the dbus instance
         with open(dbus, 'w') as fo:
@@ -234,6 +479,7 @@ NotAfter=0
         finally:
             os.unlink(sock)
             os.unlink('/run/systemd/ask-password/ask.btrfs-backup')
+            os.unlink('run/btrfs-backup/pw')
 
         return
 
@@ -252,7 +498,7 @@ NotAfter=0
 
             self.pr('+ Snapshotting backup with id %s' % uuid)
 
-            self.mount(backup['localuuid'], dirs['self'])
+            self.cmd_mount(backup['localuuid'], dirs['self'])
 
             try:
                 for vol in backup['volumes']:
@@ -266,7 +512,7 @@ NotAfter=0
                 raise
 
             finally:
-                self.unmount(dirs['self'])
+                self.cmd_unmount(dirs['self'])
         return
 
     def btrfs_snapshot(self, path, snap, readonly=True):
@@ -293,7 +539,7 @@ Arguments:
 
         return
 
-    def mount(self, src, path, uuid=True, opts='subvolid=0'):
+    def cmd_mount(self, src, path, uuid=True, opts='subvolid=0'):
         '''
 Mount a device
 
@@ -313,7 +559,7 @@ Arguments:
 
         return
 
-    def unmount(self, mountpoint):
+    def cmd_unmount(self, mountpoint):
         '''Unmount a device'''
 
         if not os.path.ismount(mountpoint):
@@ -350,5 +596,6 @@ if __name__ == '__main__':
 
     except Exception as e:
         if not qflag:
-            print('+ Got Exception %s: %s' % (e.__class__.__name__, str(e)))
+            print('+ Got Exception "%s"' % e.__class__.__name__)
+        print(str(e))
         raise SystemExit(1)
