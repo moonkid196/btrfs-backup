@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 import argparse
+from bbcolor import bbcolor
 import collections
 import json
 import os
@@ -18,11 +19,16 @@ qflag = not sys.stdout.isatty()
 class btrfs_backup:
 
     # Global variables/defaults
-    HOME = '/var/lib/btrfs-backup'
-    DATE = time.localtime()
-    CONFIGFILE = HOME + '/config'
-    CONF = None
-    qflag = not sys.stdout.isatty()
+    HOME        = '/var/lib/btrfs-backup'
+    DATE        = time.localtime()
+    CONFIGFILE  = HOME + '/config'
+    CONF        = None
+    qflag       = not sys.stdout.isatty()
+    msgpre      = bbcolor().format('+', fg=21, style='normal')
+
+    COLOR_DEFAULT = 250
+    COLOR_ERROR   = 160
+    COLOR_VALUE   = 48
 
     class PrivilegedExit(Exception):
         '''Raised when the privileged version of this process/class exits'''
@@ -40,9 +46,25 @@ class btrfs_backup:
         self.qflag      = self.__class__.qflag
         self.DATE = '%04d-%02d-%02d-%02d' % (DATE.tm_year, DATE.tm_mon, DATE.tm_mday, DATE.tm_hour)
 
-    def pr(self, msg):
+        self.bbc = bbcolor(quiet=True)
+        self.msgpre = bbc.format('+', fg=21, style='normal')
+        if os.getuid() != 0:
+            self.COLOR_DEFAULT = 250
+            self.bbc.set_fg(self.COLOR_DEFAULT)
+        else:
+            self.COLOR_DEFAULT = 255
+            self.bbc.set_fg(255)
+            self.bbc.set_style('bold')
+        return
+
+    def pr(self, msg, file=sys.stdout, bbc=None):
+        '''Method to print a standard status message'''
+
+        if bbc is None:
+            bbc = self.bbc
+
         if not self.qflag:
-            print(msg)
+            print(self.msgpre, bbc.format(msg), file=file)
         return
 
     def parseargs(self, args):
@@ -84,6 +106,12 @@ class btrfs_backup:
         verb_mount.add_argument('mount_uuid', type=uuid.UUID, \
             metavar='UUID', nargs=1, help='UUID of the backup to mount')
 
+        # Unmount a backup
+        verb_unmount = subparsers.add_parser('unmount', \
+            help='Unmount the disks for a backup')
+        verb_unmount.add_argument('unmount_uuid', type=uuid.UUID, \
+            metavar='UUID', nargs=1, help='UUID of the backup to unmount')
+
         self.args = parser.parse_args(args)
 
         if self.args.quiet:
@@ -105,28 +133,28 @@ class btrfs_backup:
         if os.getuid() == 0:
             return
 
-        self.pr('+ Changing to root')
+        self.pr('Changing to root')
 
         args.extend(argv)
         args.insert(0, 'sudo')
         returncode = subprocess.call(args)
 
         if returncode != 0:
-            self.pr('+ Privileged process exited non-zero (%d)' % returncode)
+            raise Exception('Privileged process exited non-zero (%d)' % returncode)
 
-        self.pr('+ Exited from privileged process')
+        self.pr('Exited from privileged process')
         raise self.__class__.PrivilegedExit
 
     def parseconfig(self):
         # For easier reference
         CONFIGFILE = self.CONFIGFILE
 
-        self.pr('+ Parsing %s' % CONFIGFILE)
+        self.pr('Parsing %s' % CONFIGFILE)
         CONFIGFILE = os.path.abspath(CONFIGFILE)
         CONFIGFILE = os.path.realpath(CONFIGFILE)
         self.CONFIGFILE = CONFIGFILE
 
-        self.pr('+ Using %s' % CONFIGFILE)
+        self.pr('Using %s' % CONFIGFILE)
 
         try:
             # Make sure this is explicitly readable by root
@@ -141,9 +169,8 @@ class btrfs_backup:
             # Optionally test these things for more descriptive error message
             # os.path.exists(CONFIGFILE)
             # os.path.isfile(CONFIGFILE)
-            print('ERROR: Could not load config file, %s' % CONFIGFILE, \
-                file=sys.stderr, flush=True)
-            raise
+            raise Exception('%s: Could not load config file, %s' % \
+                (e.__class__.__name__, CONFIGFILE))
 
         else:
             os.environ['HOME'] = self.CONF['dirs']['home']
@@ -162,6 +189,10 @@ class btrfs_backup:
         if self.args.verb == 'mount':
             self.keyring()
             self.mount(self.args.mount_uuid[0])
+            return
+
+        if self.args.verb == 'unmount':
+            self.unmount(self.args.unmount_uuid[0])
             return
 
         if self.args.verb == 'snapshot':
@@ -184,11 +215,11 @@ class btrfs_backup:
         remote = self.parseuri(uuid)
 
         if remote.protocol == 'sshfs':
-            self.pr('+ Checking if %s is alive' % remote.host)
+            self.pr('Checking if %s is alive' % remote.host)
             if not self.isalive(remote.host):
                 raise Exception('Host %s could not be reached' % remote.host)
 
-            self.pr('+ Mounting %s on %s' % (backup['uri'], dirs['remote']))
+            self.pr('Mounting %s on %s' % (backup['uri'], dirs['remote']))
             returncode = subprocess.call(('sshfs', '%s@%s:%s' % \
                 (remote.user, remote.host, remote.path), \
                 dirs['remote']), stdout=subprocess.DEVNULL)
@@ -199,27 +230,56 @@ class btrfs_backup:
             raise Exception('Unknown protocol: %s' % remote.protocol)
 
         image = os.path.join(dirs['remote'], remote.image)
-        self.pr('+ Mapping %s to loop device' % image)
+        self.pr('Mapping %s to loop device' % image)
         device = self.losetup(image)
 
         if backup['encrypt']:
             luksUUID = self.luksUUID(device)
             luksdev  = 'luks-%s' % luksUUID
 
-            self.pr('+ Reading encryption passphrase from gnome-keyring')
+            self.pr('Reading encryption passphrase from gnome-keyring')
             pw = self.get_secret('disk', luksUUID)
 
-            self.pr('+ Opening %s as %s' % (device, luksdev))
+            self.pr('Opening %s as %s' % (device, luksdev))
             self.cryptsetup('open', luksdev, device, pw)
             device = os.path.join('/dev/mapper', luksdev)
 
-        self.pr('+ Mounting %s on %s' % (device, dirs['backups']))
+        self.pr('Mounting %s on %s' % (device, dirs['backups']))
 
         if backup['compress']:
             self.cmd_mount(device, dirs['backups'], uuid=False, \
                 opts='subvolid=0,compress')
         else:
             self.cmd_mount(device, dirs['backups'], uuid=False)
+
+        return
+
+    def unmount(self, uuid):
+        '''Method to handle unmounting backup disks'''
+
+        uuid     = str(uuid)
+        backup   = self.CONF['backups'][uuid]
+        dirs     = self.CONF['dirs']
+        remote   = self.parseuri(uuid)
+        image    = os.path.join(dirs['remote'], remote.image)
+        loopdev  = self.losetup(image, verb='read')
+
+        self.cmd_unmount(dirs['backups'])
+
+        if backup['encrypt']:
+            luksUUID = self.luksUUID(loopdev)
+            self.pr('Closing luks-%s' % luksUUID)
+            self.cryptsetup('close', 'luks-%s' % luksUUID)
+
+        self.losetup(image, verb='delete')
+
+        if remote.protocol == 'sshfs':
+            returncode = subprocess.call(('fusermount', '-u', dirs['remote']))
+            if returncode != 0:
+                raise Exception('Failed to unmount %s' % dirs['remount'])
+
+        self.pr('Unmounting %s' % dirs['self'])
+        self.cmd_unmount(dirs['self'])
 
         return
 
@@ -233,7 +293,7 @@ class btrfs_backup:
             # Sanity-checking the UUID
             myuuid = uuid.UUID(output.strip())
 
-            self.pr('+ Found UUID %s for %s' % (str(myuuid), device))
+            self.pr('Found UUID %s for %s' % (str(myuuid), device))
             return str(myuuid)
 
         except subprocess.CalledProcessError:
@@ -281,7 +341,7 @@ class btrfs_backup:
 
         return
 
-    def losetup(self, image, delete=False):
+    def losetup(self, image, verb='map'):
         '''Method to interact with the losetup tool'''
 
         loopdev = None
@@ -294,19 +354,25 @@ class btrfs_backup:
                 loop = line.split()
                 if loop[-1] == image:
                     loopdev = loop[0]
-                    self.pr('+ Found mapping %s => %s' % (image, loopdev))
+                    self.pr('Found mapping %s => %s' % (image, loopdev))
 
-            if delete:
+            if verb == 'delete':
                 if loopdev is None:
-                    print('WARNING: %s is not mapped to any loop devices', \
-                        file=sys.stderr, flush=True)
+                    self.bbc.pr(\
+                        'WARNING: %s is not mapped to any loop devices', \
+                        fg=self.COLOR_ERROR, file=sys.stderr)
                     return
 
-                self.pr('+ Deleting %s' % loopdev)
+                self.pr('Deleting %s' % loopdev)
                 returncode = subprocess.call(('losetup', '-d', loopdev))
                 if returncode != 0:
                     raise Exception('losetup -d %s returned non-zero' % loopdev)
                 return
+
+            if verb == 'read':
+                if loopdev is None:
+                    raise Exception('Loop device not found for %s' % image)
+                return loopdev
 
             returncode = subprocess.call(('losetup', '-f', image))
             if returncode != 0:
@@ -319,7 +385,7 @@ class btrfs_backup:
                 loop = line.split()
                 if loop[-1] == image:
                     loopdev = loop[0]
-                    self.pr('+ Mapped %s => %s' % (image, loopdev))
+                    self.pr('Mapped %s => %s' % (image, loopdev))
                     return loopdev
 
             raise Exception('losetup did not fail, but file never got mapped')
@@ -338,22 +404,22 @@ class btrfs_backup:
         path     = None
         image    = None
 
-        self.pr('+ Setting remote protocol to %s' % o.scheme)
+        self.pr('Setting remote protocol to %s' % o.scheme)
         protocol = o.scheme
 
-        self.pr('+ Setting remote path to %s' % os.path.dirname(o.path))
+        self.pr('Setting remote path to %s' % os.path.dirname(o.path))
         path     = os.path.dirname(o.path)
 
-        self.pr('+ Setting remote image to %s' % os.path.basename(o.path))
+        self.pr('Setting remote image to %s' % os.path.basename(o.path))
         image    = os.path.basename(o.path)
 
         res = o.netloc.rpartition('@')
 
-        self.pr('+ Setting remote host to %s' % res[2])
+        self.pr('Setting remote host to %s' % res[2])
         host = res[2]
 
         if res[0] != '':
-            self.pr('+ Setting remote user to %s' % res[0])
+            self.pr('Setting remote user to %s' % res[0])
             user = res[0]
 
         remote = uri(protocol, user, host, path, image)
@@ -380,12 +446,12 @@ class btrfs_backup:
 
         # Check for existing keyring
         if os.path.exists(dbus) and os.path.exists(keyring):
-            self.pr('+ Found existing keyring')
+            self.pr('Found existing keyring')
 
             with open(dbus, 'r') as f:
                 for line in f.readlines():
                     k,s,v = line.strip().partition('=')
-                    self.pr('+ %s=%s' % (k, v))
+                    self.pr('%s=%s' % (k, v))
 
                     if k == 'DBUS_SESSION_BUS_ADDRESS':
                         os.environ[k] = v
@@ -393,7 +459,7 @@ class btrfs_backup:
             with open(keyring, 'r') as f:
                 for line in f.readlines():
                     k,s,v = line.strip().partition('=')
-                    self.pr('+ Found %s=%s' % (k, v))
+                    self.pr('Found %s=%s' % (k, v))
 
                 os.environ[k] = v
 
@@ -401,18 +467,18 @@ class btrfs_backup:
 
         # Start the dbus instance
         with open(dbus, 'w') as fo:
-            self.pr('+ Starting dbus session')
+            self.pr('Starting dbus session')
             output = subprocess.check_output(('dbus-launch',)).decode()
 
             # Save the output to a standard location
-            self.pr('+ Saving dbus information')
+            self.pr('Saving dbus information')
             fo.write(output)
 
             # Fine the address needed by other processes and put it into the
             # environment
-            self.pr('+ Parsing dbus output')
+            self.pr('Parsing dbus output')
             for line in output.splitlines():
-                self.pr('+ Found %s' % line)
+                self.pr('Found %s' % line)
 
                 var, val = line.split('=', 1)
                 if var == 'DBUS_SESSION_BUS_ADDRESS':
@@ -420,7 +486,7 @@ class btrfs_backup:
 
         # Start the Gnome keyring
         with open(keyring, 'w') as fo:
-            self.pr('+ Starting the Gnome keyring')
+            self.pr('Starting the Gnome keyring')
 
             # This sets up a socket to listen for the keyring password
             self.ask()
@@ -429,12 +495,12 @@ class btrfs_backup:
                 '--unlock', '-c', 'secrets,ssh', '-d'), input=self.pw).decode()
 
             # Save the output to a standard location
-            self.pr('+ Saving keyring information')
+            self.pr('Saving keyring information')
             fo.write(output)
 
-            self.pr('+ Parsing keyring output')
+            self.pr('Parsing keyring output')
             for line in output.splitlines():
-                self.pr('+ Found %s' % line)
+                self.pr('Found %s' % line)
 
                 var, val = line.split('=', 1)
                 os.environ[var] = val
@@ -479,13 +545,15 @@ NotAfter=0
         finally:
             os.unlink(sock)
             os.unlink('/run/systemd/ask-password/ask.btrfs-backup')
-            os.unlink('run/btrfs-backup/pw')
+            os.unlink('/run/btrfs-backup/pw')
 
         return
 
     def list(self):
         for uuid in self.CONF['backups'].keys():
-            print('UUID=%s, URI=%s' % (uuid, self.CONF['backups'][uuid]['uri']))
+            uri  = self.CONF['backups'][uuid]['uri']
+            print(self.bbc.format('UUID:'), self.bbc.format(uuid, fg=self.COLOR_VALUE))
+            print(self.bbc.format('    URI:'), self.bbc.format(uri, fg=self.COLOR_VALUE))
 
     def snapshot(self):
         '''Snapshot all local disks'''
@@ -496,13 +564,13 @@ NotAfter=0
         for uuid in self.CONF['backups'].keys():
             backup = self.CONF['backups'][uuid]
 
-            self.pr('+ Snapshotting backup with id %s' % uuid)
+            self.pr('Snapshotting backup with id %s' % uuid)
 
             self.cmd_mount(backup['localuuid'], dirs['self'])
 
             try:
                 for vol in backup['volumes']:
-                    self.pr('+ Snapshotting subvolume %s at %s' % (vol, self.DATE))
+                    self.pr('Snapshotting subvolume %s at %s' % (vol, self.DATE))
                     path = os.path.join(dirs['self'], vol)
                     snap = '%s-%s' % (path, self.DATE)
 
@@ -573,6 +641,14 @@ Arguments:
 
 
 if __name__ == '__main__':
+    bbc = bbcolor(quiet=True)
+    msgpre = bbc.format('+', fg=21, style='normal')
+    if os.getuid() != 0:
+        bbc.set_fg(250)
+    else:
+        bbc.set_fg(255)
+        bbc.set_style('bold')
+
     # This is just a good idea
     os.umask(0o77)
 
@@ -591,11 +667,11 @@ if __name__ == '__main__':
 
     except btrfs_backup.PrivilegedExit as e:
         if not qflag:
-            print('+ Exiting')
+            print(msgpre, bbc.format('Exiting'))
         raise SystemExit(0) from e
 
     except Exception as e:
         if not qflag:
-            print('+ Got Exception "%s"' % e.__class__.__name__)
-        print(str(e))
+            bbc.pr('+ Got Exception "%s"' % e.__class__.__name__)
+        bbc.pr('ERROR: %s' % str(e), fg=160)
         raise SystemExit(1)
