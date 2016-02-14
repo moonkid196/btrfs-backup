@@ -28,6 +28,7 @@ class btrfs_backup:
 
     COLOR_DEFAULT = 250
     COLOR_ERROR   = 160
+    COLOR_WARN    = 172
     COLOR_VALUE   = 48
 
     class PrivilegedExit(Exception):
@@ -262,24 +263,50 @@ class btrfs_backup:
         dirs     = self.CONF['dirs']
         remote   = self.parseuri(uuid)
         image    = os.path.join(dirs['remote'], remote.image)
-        loopdev  = self.losetup(image, verb='read')
 
-        self.cmd_unmount(dirs['backups'])
+        # Try to unmount the BTRFS volume. Since all of these operations are
+        # non-destructive in a sense, we ignore errors and try to go on
+        try:
+            self.cmd_unmount(dirs['backups'])
 
+        except Exception as e:
+            self.bbc.pr('WARNING: %s' % str(e), fg=self.COLOR_WARN)
+
+        # Try to close the LUKS device
         if backup['encrypt']:
-            luksUUID = self.luksUUID(loopdev)
-            self.pr('Closing luks-%s' % luksUUID)
-            self.cryptsetup('close', 'luks-%s' % luksUUID)
+            try:
+                loopdev  = self.losetup(image, verb='read')
+                luksUUID = self.luksUUID(loopdev)
+                self.pr('Closing luks-%s' % luksUUID)
+                self.cryptsetup('close', 'luks-%s' % luksUUID)
 
-        self.losetup(image, verb='delete')
+            except Exception as e:
+                self.bbc.pr('WARNING: %s' % str(e), fg=self.COLOR_WARN)
 
-        if remote.protocol == 'sshfs':
-            returncode = subprocess.call(('fusermount', '-u', dirs['remote']))
-            if returncode != 0:
-                raise Exception('Failed to unmount %s' % dirs['remount'])
+        # Try to kill the loop device
+        try:
+            self.losetup(image, verb='delete')
 
-        self.pr('Unmounting %s' % dirs['self'])
-        self.cmd_unmount(dirs['self'])
+        except Exception as e:
+            self.bbc.pr('WARNING: %s' % str(e), fg=self.COLOR_WARN)
+
+        # Try to unmount the backups share
+        try:
+            if remote.protocol == 'sshfs':
+                returncode = subprocess.call(('fusermount', '-qu', dirs['remote']))
+                if returncode != 0:
+                    raise Exception('Failed to unmount %s' % dirs['remote'])
+
+        except Exception as e:
+            self.bbc.pr('WARNING: %s' % str(e), fg=self.COLOR_WARN)
+
+        # Try to unmount the local volume
+        try:
+            self.pr('Unmounting %s' % dirs['self'])
+            self.cmd_unmount(dirs['self'])
+
+        except Exception as e:
+            self.bbc.pr('WARNING: %s' % str(e), fg=self.COLOR_WARN)
 
         return
 
@@ -359,8 +386,8 @@ class btrfs_backup:
             if verb == 'delete':
                 if loopdev is None:
                     self.bbc.pr(\
-                        'WARNING: %s is not mapped to any loop devices', \
-                        fg=self.COLOR_ERROR, file=sys.stderr)
+                        'WARNING: %s is not mapped to any loop devices' % image, \
+                        fg=self.COLOR_WARN, file=sys.stderr)
                     return
 
                 self.pr('Deleting %s' % loopdev)
