@@ -50,11 +50,11 @@ class btrfs_backup:
         self.bbc = bbcolor(quiet=True)
         self.msgpre = bbc.format('+', fg=21, style='normal')
         if os.getuid() != 0:
-            self.COLOR_DEFAULT = 250
+            self.COLOR_DEFAULT = None
             self.bbc.set_fg(self.COLOR_DEFAULT)
         else:
-            self.COLOR_DEFAULT = 255
-            self.bbc.set_fg(255)
+            self.COLOR_DEFAULT = None
+            self.bbc.set_fg(self.COLOR_DEFAULT)
             self.bbc.set_style('bold')
         return
 
@@ -100,6 +100,8 @@ class btrfs_backup:
         # Snapshot local filesystems
         verb_snapshot = subparsers.add_parser('snapshot', \
             help='Snapshot local filesystem(s)')
+        verb_snapshot.add_argument('snapshot_uuid', type=uuid.UUID, \
+            metavar='UUID', nargs=1, help='UUID of the backup profile to snapshot')
 
         # Mount a backup
         verb_mount = subparsers.add_parser('mount', \
@@ -112,6 +114,12 @@ class btrfs_backup:
             help='Unmount the disks for a backup')
         verb_unmount.add_argument('unmount_uuid', type=uuid.UUID, \
             metavar='UUID', nargs=1, help='UUID of the backup to unmount')
+
+        # Do a full run
+        verb_backup = subparsers.add_parser('backup', \
+            help='Perform a full backup run')
+        verb_backup.add_argument('backup_uuid', type=uuid.UUID, \
+            metavar='UUID', nargs=1, help='UUID of the backup profile to run')
 
         self.args = parser.parse_args(args)
 
@@ -197,8 +205,15 @@ class btrfs_backup:
             return
 
         if self.args.verb == 'snapshot':
-            self.snapshot()
+            self.snapshot(self.args.snapshot_uuid[0])
             return
+
+        if self.args.verb == 'backup':
+            self.snapshot(self.args.backup_uuid[0])
+            self.keyring()
+            self.mount(self.args.backup_uuid[0])
+            self.backup(self.args.backup_uuid[0])
+            self.unmount(self.args.backup_uuid[0])
 
         return
 
@@ -582,32 +597,48 @@ NotAfter=0
             print(self.bbc.format('UUID:'), self.bbc.format(uuid, fg=self.COLOR_VALUE))
             print(self.bbc.format('    URI:'), self.bbc.format(uri, fg=self.COLOR_VALUE))
 
-    def snapshot(self):
+    def snapshot(self, uuid):
         '''Snapshot all local disks'''
 
         # Easier referencing
         dirs = self.CONF['dirs']
+        uuid = str(uuid)
 
-        for uuid in self.CONF['backups'].keys():
-            backup = self.CONF['backups'][uuid]
+        if uuid not in self.CONF['backups']:
+            raise Exception('UUID %s not a valid backup id' % uuid)
 
-            self.pr('Snapshotting backup with id %s' % uuid)
+        backup = self.CONF['backups'][uuid]
 
-            self.cmd_mount(backup['localuuid'], dirs['self'])
+        self.pr('Snapshotting backup with id %s' % uuid)
 
-            try:
-                for vol in backup['volumes']:
-                    self.pr('Snapshotting subvolume %s at %s' % (vol, self.DATE))
-                    path = os.path.join(dirs['self'], vol)
-                    snap = '%s-%s' % (path, self.DATE)
+        self.cmd_mount(backup['localuuid'], dirs['self'])
 
-                    self.btrfs_snapshot(path, snap)
+        try:
+            for vol in backup['volumes']:
+                self.pr('Snapshotting subvolume %s at %s' % (vol, self.DATE))
+                path = os.path.join(dirs['self'], vol)
+                snap = '%s-%s' % (path, self.DATE)
 
-            except:
-                raise
+                self.btrfs_snapshot(path, snap)
 
-            finally:
-                self.cmd_unmount(dirs['self'])
+        except:
+            raise
+
+        finally:
+            self.cmd_unmount(dirs['self'])
+        return
+
+    def backup(self, uuid):
+        '''Method which sends snapshots to the destination and ages local and
+        remote snapshots'''
+
+        dirs   = self.CONF['dirs']
+        uuid   = str(uuid)
+        backup = self.CONF['backups'][uuid]
+
+        local_snapshots  = os.listdir(dirs['self'])
+        remote_snapshots = os.listdir(dirs['backups'])
+
         return
 
     def btrfs_snapshot(self, path, snap, readonly=True):
@@ -670,10 +701,7 @@ Arguments:
 if __name__ == '__main__':
     bbc = bbcolor(quiet=True)
     msgpre = bbc.format('+', fg=21, style='normal')
-    if os.getuid() != 0:
-        bbc.set_fg(250)
-    else:
-        bbc.set_fg(255)
+    if os.getuid() == 0:
         bbc.set_style('bold')
 
     # This is just a good idea
