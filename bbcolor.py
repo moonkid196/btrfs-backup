@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/env python
 #
 # Bryan Burke
 # bburke@baburke.net
@@ -15,10 +15,10 @@ class BadColor(Exception):
 
 class bbcolor:
     '''Class to handle a single color-scheme/output
-    
+
     All set_* methods support resetting to defaults by calling the method with
     no arguments
-    
+
     Example use:
     >>> from bbcolor import bbcolor
     >>> bbc = bbcolor()
@@ -33,15 +33,15 @@ class bbcolor:
 
     def __init__(self, quiet=True):
         if not quiet:
-            print('+ Initializing bbcolor object')
+            sys.stdout.write('+ Initializing bbcolor object\n')
 
         if sys.stdout.isatty():
             if not quiet:
-                print('\033[38;5;112m+ Detected terminal, using color\033[0m')
+                sys.stdout.write('\033[38;5;112m+ Detected terminal, using color\033[0m\n')
             self._color = True
         else:
             if not quiet:
-                print('+ No terminal detected, not using color')
+                sys.stdout.write('+ No terminal detected, not using color\n')
             self._color = False
 
         self.set_fg()
@@ -54,45 +54,41 @@ class bbcolor:
 
         use: True/False for whether to use color'''
 
-        # Just making sure it get sets to a boolean
-        if use:
-            self._color = True
-        else:
-            self._color = False
+        assert type(use) == bool
 
-    def set_fg(self, fg=None):
+        self._color = use
+
+    def set_fg(self, foreground=None):
         '''Set a default foreground color
-        
-        fg: Numeric (0-255) color to use'''
 
-        if fg is None:
+        foreground: Numeric (0-255) color to use'''
+
+        if foreground is None:
             self._fg = None
             return
 
-        if not self._color:
-            return
+        assert type(foreground) == int
 
-        if fg not in range(256):
-            raise BadColor('%s is not in [0, 255]' % str(fg))
+        if foreground not in range(256):
+            raise BadColor('%s is not in [0, 255]' % str(foreground))
 
-        self._fg = fg
+        self._fg = foreground
 
-    def set_bg(self, bg=None):
+    def set_bg(self, background=None):
         '''Set a default background color
-        
-        bg: Numeric (0-255) color to use'''
 
-        if bg is None:
+        background: Numeric (0-255) color to use'''
+
+        if background is None:
             self._bg = None
             return
 
-        if not self._color:
-            return
+        assert type(background) == int
 
-        if bg not in range(256):
-            raise BadColor('%s is not in [0, 255]' % str(bg))
+        if background not in range(256):
+            raise BadColor('%s is not in [0, 255]' % str(background))
 
-        self._bg = bg
+        self._bg = background
 
     def set_style(self, style=None):
         '''Set a default style
@@ -102,9 +98,11 @@ class bbcolor:
         discarded'''
 
         if style is None:
-            self._style = style
+            self._style = None
         else:
             self._style = str(style)
+
+        self._style_string = self._parse_style(self._style)
 
     def _parse_style(self, style):
         '''Parse a style string'''
@@ -128,54 +126,56 @@ class bbcolor:
 
         return ';'.join(lstyle)
 
-    def set_file(self, file=None):
+    def set_file(self, out_file=None):
         '''Default output stream to use
-        
-        'file' should be a file-like object or None to reset to default'''
 
-        if file is None:
+        'out_file' should be a file-like object or None to reset to default'''
+
+        if out_file is None:
             self._file = self.__class__._file
         else:
-            self._file = file
+            self._file = out_file
 
-    def pr(self, msg, fg=None, bg=None, style=None, file=None):
+    def pr(self, msg, foreground=None, background=None, style=None,
+            out_file=None):
         '''Function to print a message with the given attributes'''
 
         # Set defaults, if any
-        if file is None:
-            file = self._file
+        if out_file is None:
+            _file = self._file
 
-        s = self.format(msg, fg=fg, bg=bg, style=style)
+        out_str = self.format(msg, foreground=foreground, background=background,
+                style=style)
 
-        print(s, file=file)
+        _file.write(out_str + '\n')
 
-    def format(self, msg, fg=None, bg=None, style=None):
+    def format(self, msg, foreground=None, background=None, style=None):
         '''Function to format a message with the given attributes'''
 
-        # Set defaults, if any
-        if fg is None:
-            fg = self._fg
+        if not self._color:
+            return msg
 
-        if bg is None:
-            bg = self._bg
+        # Set defaults, if any
+        if foreground is None:
+            foreground = self._fg
+
+        if background is None:
+            background = self._bg
 
         if style is None:
-            style = self._style
+            style = self._style_string
+        else:
+            style = self._parse_style(style)
 
         # Parse the actual values
-        if fg is None:
-            fg = '39'
+        if foreground is None:
+            foreground = '39'
         else:
-            fg = '38;5;%d' % fg
+            foreground = '38;5;%d' % foreground
 
-        if bg is None:
-            bg = '49'
+        if background is None:
+            background = '49'
         else:
-            bg = '48;5;%d' % bg
+            background = '48;5;%d' % background
 
-        style = self._parse_style(style)
-
-        if self._color:
-            return '\033[%s;%s;%sm%s\033[0m' % (fg, bg, style, msg)
-        else:
-            return '\033[%sm%s\033[0m' % (style, msg)
+        return '\033[%s;%s;%sm%s\033[0m' % (foreground, background, style, msg)
