@@ -24,7 +24,7 @@ class btrfs_backup:
     CONFIGFILE  = HOME + '/config'
     CONF        = None
     qflag       = not sys.stdout.isatty()
-    msgpre      = bbcolor().format('+', fg=21, style='normal')
+    msgpre      = bbcolor().format('+', foreground=21, style='normal')
 
     COLOR_DEFAULT = 250
     COLOR_ERROR   = 160
@@ -48,7 +48,7 @@ class btrfs_backup:
         self.DATE = '%04d-%02d-%02d-%02d' % (DATE.tm_year, DATE.tm_mon, DATE.tm_mday, DATE.tm_hour)
 
         self.bbc = bbcolor(quiet=True)
-        self.msgpre = bbc.format('+', fg=21, style='normal')
+        self.msgpre = bbc.format('+', foreground=21, style='normal')
         if os.getuid() != 0:
             self.COLOR_DEFAULT = None
             self.bbc.set_fg(self.COLOR_DEFAULT)
@@ -179,7 +179,7 @@ class btrfs_backup:
             # os.path.exists(CONFIGFILE)
             # os.path.isfile(CONFIGFILE)
             raise Exception('%s: Could not load config file, %s' % \
-                (e.__class__.__name__, CONFIGFILE))
+                (e, CONFIGFILE))
 
         else:
             os.environ['HOME'] = self.CONF['dirs']['home']
@@ -285,7 +285,7 @@ class btrfs_backup:
             self.cmd_unmount(dirs['backups'])
 
         except Exception as e:
-            self.bbc.pr('WARNING: %s' % str(e), fg=self.COLOR_WARN)
+            self.bbc.pr('WARNING: %s' % str(e), foreground=self.COLOR_WARN)
 
         # Try to close the LUKS device
         if backup['encrypt']:
@@ -296,14 +296,14 @@ class btrfs_backup:
                 self.cryptsetup('close', 'luks-%s' % luksUUID)
 
             except Exception as e:
-                self.bbc.pr('WARNING: %s' % str(e), fg=self.COLOR_WARN)
+                self.bbc.pr('WARNING: %s' % str(e), foreground=self.COLOR_WARN)
 
         # Try to kill the loop device
         try:
             self.losetup(image, verb='delete')
 
         except Exception as e:
-            self.bbc.pr('WARNING: %s' % str(e), fg=self.COLOR_WARN)
+            self.bbc.pr('WARNING: %s' % str(e), foreground=self.COLOR_WARN)
 
         # Try to unmount the backups share
         try:
@@ -313,7 +313,7 @@ class btrfs_backup:
                     raise Exception('Failed to unmount %s' % dirs['remote'])
 
         except Exception as e:
-            self.bbc.pr('WARNING: %s' % str(e), fg=self.COLOR_WARN)
+            self.bbc.pr('WARNING: %s' % str(e), foreground=self.COLOR_WARN)
 
         # Try to unmount the local volume
         try:
@@ -321,7 +321,7 @@ class btrfs_backup:
             self.cmd_unmount(dirs['self'])
 
         except Exception as e:
-            self.bbc.pr('WARNING: %s' % str(e), fg=self.COLOR_WARN)
+            self.bbc.pr('WARNING: %s' % str(e), foreground=self.COLOR_WARN)
 
         return
 
@@ -402,7 +402,7 @@ class btrfs_backup:
                 if loopdev is None:
                     self.bbc.pr(\
                         'WARNING: %s is not mapped to any loop devices' % image, \
-                        fg=self.COLOR_WARN, file=sys.stderr)
+                        foreground=self.COLOR_WARN, file=sys.stderr)
                     return
 
                 self.pr('Deleting %s' % loopdev)
@@ -594,8 +594,8 @@ NotAfter=0
     def list(self):
         for uuid in self.CONF['backups'].keys():
             uri  = self.CONF['backups'][uuid]['uri']
-            print(self.bbc.format('UUID:'), self.bbc.format(uuid, fg=self.COLOR_VALUE))
-            print(self.bbc.format('    URI:'), self.bbc.format(uri, fg=self.COLOR_VALUE))
+            print(self.bbc.format('UUID:'), self.bbc.format(uuid, foreground=self.COLOR_VALUE))
+            print(self.bbc.format('    URI:'), self.bbc.format(uri, foreground=self.COLOR_VALUE))
 
     def snapshot(self, uuid):
         '''Snapshot all local disks'''
@@ -700,7 +700,7 @@ Arguments:
 
 if __name__ == '__main__':
     bbc = bbcolor(quiet=True)
-    msgpre = bbc.format('+', fg=21, style='normal')
+    msgpre = bbc.format('+', foreground=21, style='normal')
     if os.getuid() == 0:
         bbc.set_style('bold')
 
@@ -728,5 +728,5 @@ if __name__ == '__main__':
     except Exception as e:
         if not qflag:
             bbc.pr('+ Got Exception "%s"' % e.__class__.__name__)
-        bbc.pr('ERROR: %s' % str(e), fg=160)
+        bbc.pr('ERROR: %s' % str(e), foreground=160)
         raise SystemExit(1)
