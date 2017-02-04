@@ -3,7 +3,7 @@
 import argparse
 from bbcolor import bbcolor
 import collections
-import json
+import logging
 import os
 import os.path
 import time
@@ -13,23 +13,44 @@ import sys
 import tempfile
 from urllib.parse import urlparse
 import uuid
+import yaml
 
 qflag = not sys.stdout.isatty()
+
+def get_logger(name, level=logging.DEBUG, full=True):
+    if full:
+        formatter = logging.Formatter(fmt='{asctime} {message}', style='{')
+    else:
+        formatter = logging.Formatter(fmt='{message}', style='')
+
+    handler = logging.StreamHandler()
+    handler.setFormatter(formatter)
+    handler.setLevel(level)
+
+    logger = logging.Logger(name, level)
+    logger.addHandler(handler)
+
+    return logger
 
 class btrfs_backup:
 
     # Global variables/defaults
-    HOME        = '/var/lib/btrfs-backup'
-    DATE        = time.localtime()
-    CONFIGFILE  = HOME + '/config'
-    CONF        = None
-    qflag       = not sys.stdout.isatty()
-    msgpre      = bbcolor().format('+', foreground=21, style='normal')
+    HOME = '/var/lib/btrfs-backup'
+    DATE = time.localtime()
+    CONFIGFILE = '{}/config.yaml'.format(HOME)
+    CONF = None
+    qflag = not sys.stdout.isatty()
+    msgpre = bbcolor().format('+', foreground=21, style='normal')
 
+    # Logging colors
+    COLOR_ERROR = 31
+    COLOR_WARN = 33
+    COLOR_INFO = 32
+    COLOR_DEBUG = 35
+
+    # Old values
     COLOR_DEFAULT = 250
-    COLOR_ERROR   = 160
-    COLOR_WARN    = 172
-    COLOR_VALUE   = 48
+    COLOR_VALUE = 48
 
     class PrivilegedExit(Exception):
         '''Raised when the privileged version of this process/class exits'''
@@ -40,35 +61,49 @@ class btrfs_backup:
         pass
 
     def __init__(self):
-        self.HOME       = self.__class__.HOME
-        DATE            = self.__class__.DATE
-        self.CONFIGFILE = self.__class__.CONFIGFILE
-        self.CONF       = self.__class__.CONF
-        self.qflag      = self.__class__.qflag
+        DATE = self.__class__.DATE
         self.DATE = '%04d-%02d-%02d-%02d' % (DATE.tm_year, DATE.tm_mon, DATE.tm_mday, DATE.tm_hour)
+        self.logger = get_logger(__name__)
+        self.color = True
 
-        self.bbc = bbcolor(quiet=True)
-        self.msgpre = bbc.format('+', foreground=21, style='normal')
-        if os.getuid() != 0:
-            self.COLOR_DEFAULT = None
-            self.bbc.set_fg(self.COLOR_DEFAULT)
+    def _error(self, message):
+        if self.color:
+            mstring = '\033[{}mERROR: {}\033[0m'.format(self.COLOR_ERROR, message)
         else:
-            self.COLOR_DEFAULT = None
-            self.bbc.set_fg(self.COLOR_DEFAULT)
-            self.bbc.set_style('bold')
-        return
+            mstring = 'ERROR: {}'.format(message)
+
+        self.logger.error(mstring)
+
+    def _warn(self, message):
+        if self.color:
+            mstring = '\033[{}mWARN: {}\033[0m'.format(self.COLOR_WARN, message)
+        else:
+            mstring = 'WARN: {}'.format(message)
+
+        self.logger.warn(mstring)
+
+    def _info(self, message):
+        if self.color:
+            mstring = '\033[{}m+ {}\033[0m'.format(self.COLOR_INFO, message)
+        else:
+            mstring = '+ {}'.format(message)
+
+        self.logger.info(mstring)
+
+    def _debug(self, message):
+        if self.color:
+            mstring = '\033[{}m+ {}\033[0m'.format(self.COLOR_DEBUG, message)
+        else:
+            mstring = '+ {}'.format(message)
+
+        self.logger.debug(mstring)
 
     def pr(self, msg, file=sys.stdout, bbc=None):
-        '''Method to print a standard status message'''
 
-        if bbc is None:
-            bbc = self.bbc
+        self._warn('calling old pr() method')
+        self._debug('message = {}'.format(msg))
 
-        if not self.qflag:
-            print(self.msgpre, bbc.format(msg), file=file)
-        return
-
-    def parseargs(self, args):
+    def parse_args(self, argv):
         CONFIGFILE = self.CONFIGFILE # For easier reference
 
         # Main parser
@@ -83,7 +118,7 @@ class btrfs_backup:
             action='store_true', default=False, \
             help='If specified, print status messages')
 
-        parser.add_argument('-f', dest='file', default=CONFIGFILE, nargs=1, \
+        parser.add_argument('-f', dest='file', default=CONFIGFILE, \
             help='Specify alternate configuration file (default is %s)' % \
             CONFIGFILE)
         subparsers = parser.add_subparsers(dest='verb', \
@@ -121,7 +156,7 @@ class btrfs_backup:
         verb_backup.add_argument('backup_uuid', type=uuid.UUID, \
             metavar='UUID', nargs=1, help='UUID of the backup profile to run')
 
-        self.args = parser.parse_args(args)
+        self.args = parser.parse_args(argv[1:])
 
         if self.args.quiet:
             self.qflag = True
@@ -129,63 +164,52 @@ class btrfs_backup:
         if self.args.verbose:
             self.qflag = False
 
-        self.CONFIGFILE = self.args.file[0]
+        self.CONFIGFILE = self.args.file
 
-        return
+        self._debug('qflag = {}'.format(self.qflag))
+        self._debug('verb = {}'.format(self.args.verb))
+        self._debug('CONFIGFILE = {}'.format(self.CONFIGFILE))
 
-    def turn_root(self, argv):
-        '''Function to make sure we run as root'''
+        if self.args.verb is None:
+            self._error('No operation given')
+            raise Exception('No operation given')
 
-        args = []
+        return self
 
-        # Check if we're already root
-        if os.getuid() == 0:
-            return
+    def config(self):
 
-        self.pr('Changing to root')
+        if self.CONF is not None:
+            self._debug('returning cached config')
+            return CONF
 
-        args.extend(argv)
-        args.insert(0, 'sudo')
-        returncode = subprocess.call(args)
-
-        if returncode != 0:
-            raise Exception('Privileged process exited non-zero (%d)' % returncode)
-
-        self.pr('Exited from privileged process')
-        raise self.__class__.PrivilegedExit
-
-    def parseconfig(self):
         # For easier reference
         CONFIGFILE = self.CONFIGFILE
 
-        self.pr('Parsing %s' % CONFIGFILE)
+        self._info('Parsing %s' % CONFIGFILE)
         CONFIGFILE = os.path.abspath(CONFIGFILE)
         CONFIGFILE = os.path.realpath(CONFIGFILE)
         self.CONFIGFILE = CONFIGFILE
 
-        self.pr('Using %s' % CONFIGFILE)
+        self._debug('Using %s' % CONFIGFILE)
 
         try:
             # Make sure this is explicitly readable by root
-            if not os.access(CONFIGFILE, os.R_OK, effective_ids=True):
-                raise PermissionError(CONFIGFILE)
-
             with open(CONFIGFILE, 'r') as f:
+                self.CONF = yaml.load(f)
 
-                self.CONF = json.load(f)
-
-        except Exception as e:
-            # Optionally test these things for more descriptive error message
-            # os.path.exists(CONFIGFILE)
-            # os.path.isfile(CONFIGFILE)
-            raise Exception('%s: Could not load config file, %s' % \
-                (e, CONFIGFILE))
+        except PermissionError as e:
+            self._error('Could not read config file; are you root?')
+            raise SystemExit(1)
 
         else:
             os.environ['HOME'] = self.CONF['dirs']['home']
 
-    def run(self):
+        return self.CONF
+
+    def run(self, args=sys.argv[:]):
         '''Method to execute the command given'''
+
+        self.parse_args(args)
 
         if self.args.verb == 'list':
             self.list()
@@ -592,41 +616,51 @@ NotAfter=0
         return
 
     def list(self):
-        for uuid in self.CONF['backups'].keys():
-            uri  = self.CONF['backups'][uuid]['uri']
-            print(self.bbc.format('UUID:'), self.bbc.format(uuid, foreground=self.COLOR_VALUE))
-            print(self.bbc.format('    URI:'), self.bbc.format(uri, foreground=self.COLOR_VALUE))
+        '''
+        Lists the available configurations
+        '''
+
+        self._info('listing available configurations')
+
+        config = self.config()
+
+        for uuid in config['backups'].keys():
+            uri  = config['backups'][uuid]['uri']
+
+            print('UUID: {}'.format(uuid))
+            print('    URI: {}'.format(uri))
 
     def snapshot(self, uuid):
-        '''Snapshot all local disks'''
+        '''Snapshot a local disk'''
+
+        self._info('snapshotting local disk')
 
         # Easier referencing
-        dirs = self.CONF['dirs']
+        config = self.config()
+        dirs = config['dirs']
         uuid = str(uuid)
 
-        if uuid not in self.CONF['backups']:
-            raise Exception('UUID %s not a valid backup id' % uuid)
+        if uuid not in config['backups']:
+            message = 'UUID {} not a valid backup id'.format(uuid)
+            self._error(message)
+            raise Exception(message)
 
-        backup = self.CONF['backups'][uuid]
+        self._debug('snapshotting backup with id = {}'.format(uuid))
 
-        self.pr('Snapshotting backup with id %s' % uuid)
-
-        self.cmd_mount(backup['localuuid'], dirs['self'])
+        backup = config['backups'][uuid]
 
         try:
-            for vol in backup['volumes']:
-                self.pr('Snapshotting subvolume %s at %s' % (vol, self.DATE))
-                path = os.path.join(dirs['self'], vol)
-                snap = '%s-%s' % (path, self.DATE)
+            self.cmd_mount(backup['localuuid'], dirs['self'])
+
+            for volume in backup['volumes']:
+                self._debug('snapshotting subvolume {}'.format(volume))
+                path = os.path.join(dirs['self'], volume)
+                snap = '{}-{}'.format(path, self.DATE)
 
                 self.btrfs_snapshot(path, snap)
 
-        except:
-            raise
-
         finally:
             self.cmd_unmount(dirs['self'])
-        return
 
     def backup(self, uuid):
         '''Method which sends snapshots to the destination and ages local and
@@ -650,20 +684,18 @@ Arguments:
   snap = path to the snapshot
   readonly = (Default True) whether to make a readonly snapshot
 '''
-        # Confirm that snapshot and subvolume are on the same device
-        dir0 = os.path.dirname(path)
-        dir1 = os.path.dirname(snap)
-        if os.lstat(dir0).st_dev != os.lstat(dir1).st_dev:
-            raise Exception('%s and %s wouldn\'t be on the same device')
 
-        returncode = subprocess.call(
-            ('btrfs', 'subvolume', 'snapshot', '-r', path, snap), \
-            stdout=subprocess.DEVNULL)
+        self._info('snapshotting {} as {}'.format(path, snap))
+
+        argv = ('btrfs', 'subvolume', 'snapshot', '-r', path, snap)
+
+        self._debug('running {}'.format(' '.join(argv)))
+        returncode = subprocess.call(argv, stdout=subprocess.DEVNULL)
 
         if returncode != 0:
-            raise Exception('Failed to snapshot volume %s' % path)
-
-        return
+            message = 'Failed to snapshot volume {}'.format(path)
+            self._error(message)
+            raise Exception(message)
 
     def cmd_mount(self, src, path, uuid=True, opts='subvolid=0'):
         '''
@@ -676,8 +708,15 @@ Arguments:
   opts = Mount options (Default "subvolid=0")
 '''
 
+        self._info('mounting local volume')
+
+        self._debug('path = {}'.format(path))
+        self._debug('opts = {}'.format(opts))
+
         if uuid:
             src = 'UUID=%s' % src
+
+        self._debug('src = {}'.format(src))
 
         returncode = subprocess.call(('mount', '-o', opts, src, path))
         if returncode != 0:
@@ -688,45 +727,26 @@ Arguments:
     def cmd_unmount(self, mountpoint):
         '''Unmount a device'''
 
-        if not os.path.ismount(mountpoint):
-            raise Exception('%s is not a mount point' % mountpoint)
+        argv = ('umount', mountpoint)
 
-        returncode = subprocess.call(('umount', mountpoint))
+        self._info('unmounting filesystem')
+
+        self._debug('testing path {}'.format(mountpoint))
+
+        if not os.path.ismount(mountpoint):
+            self._warn('{} is not a mountpoint')
+            return
+
+        returncode = subprocess.call(argv)
+
         if returncode != 0:
-            raise Exception('Failed to unmount %s' % mountpoint)
+            self._warn('{} was not successful'.format(' '.join(argv)))
 
         return
 
 
 if __name__ == '__main__':
-    bbc = bbcolor(quiet=True)
-    msgpre = bbc.format('+', foreground=21, style='normal')
-    if os.getuid() == 0:
-        bbc.set_style('bold')
-
     # This is just a good idea
     os.umask(0o77)
 
-    try:
-        prog = btrfs_backup()
-        prog.parseargs(sys.argv[1:])
-
-        # Set our own qflag
-        qflag = prog.qflag
-
-        prog.turn_root(sys.argv[:])
-        prog.parseconfig()
-
-        # Execute the operation
-        prog.run()
-
-    except btrfs_backup.PrivilegedExit as e:
-        if not qflag:
-            print(msgpre, bbc.format('Exiting'))
-        raise SystemExit(0) from e
-
-    except Exception as e:
-        if not qflag:
-            bbc.pr('+ Got Exception "%s"' % e.__class__.__name__)
-        bbc.pr('ERROR: %s' % str(e), foreground=160)
-        raise SystemExit(1)
+    btrfs_backup().run()
